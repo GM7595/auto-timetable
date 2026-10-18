@@ -131,6 +131,13 @@ input,select,textarea { min-width:0; }
 .plan-option-actions { display:flex; align-items:center; gap:7px; margin-top:auto; padding-top:12px; }
 .plan-option-actions .button { flex:1; }
 .engine-note { margin-top:8px; color:var(--secondary); font-size:12px; line-height:1.7; }
+.agent-inbox { margin:12px 0; padding:10px 12px; border:1px solid var(--border); border-radius:7px; background:var(--surface); color:var(--secondary); font-size:12px; }
+.agent-inbox summary { cursor:pointer; }
+.agent-inbox article { display:flex; align-items:flex-start; flex-wrap:wrap; gap:7px 12px; padding-top:12px; }
+.agent-inbox article+article { margin-top:12px; border-top:1px solid var(--border); }
+.agent-inbox article p { width:100%; color:var(--heading); overflow-wrap:anywhere; }
+.agent-inbox article small { flex:1 1 180px; line-height:1.7; }
+.agent-inbox article button { margin-left:auto; }
 .plan-error,.constraint-alert { display:flex; align-items:flex-start; gap:7px; margin:12px 0; padding:10px 12px; color:var(--danger); background:var(--danger-background); border:1px solid var(--danger-border); border-radius:4px; font-size:13px; }
 .plan-error svg,.constraint-alert svg { margin-top:3px; }
 .constraint-alert strong { font-weight:500; }
@@ -204,6 +211,8 @@ input,select,textarea { min-width:0; }
 .connection-detail strong,.connection-detail>span { display:block; font-weight:400; }
 .connection-settings .text-button { margin-top:10px; }
 .connection-settings .button { margin-top:12px; }
+.connection-settings section>.button { margin-right:14px; }
+.connection-actions { display:flex; flex-wrap:wrap; align-items:center; gap:0 14px; }
 .toast { position:fixed; z-index:200; left:50%; bottom:24px; display:flex; align-items:center; gap:8px; max-width:calc(100vw - 32px); padding:11px 14px; color:var(--toast-text); background:var(--toast-background); border-radius:5px; transform:translateX(-50%); font-size:13px; }
 .toast>svg { color:var(--toast-icon); }
 .toast button { display:grid; place-items:center; flex-shrink:0; width:22px; height:22px; margin-left:4px; padding:0; color:var(--toast-dismiss); background:transparent; border:0; border-radius:3px; }

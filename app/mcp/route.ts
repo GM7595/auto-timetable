@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { proposePlans } from "@/lib/decisions";
+import { getAgentContext, publishAgentProposal } from "@/lib/agent-proposals";
 import { computeSchedule } from "@/lib/planner";
 import { checkBrowserOrigin, getEventState, getPrivateCallerContext, HttpError, jsonResponse, readJsonBody } from "@/lib/server-store";
 
@@ -21,6 +22,26 @@ const toolDefinitions = [
     description: "進行上の変更を日本語で伝え、保存済みイベントに対する成立する変更案を比較します。提案のみで、進行表には適用しません。例：全体が10分押しています。",
     inputSchema: { type: "object", properties: { text: { type: "string", minLength: 1, maxLength: 2000, description: "変更対象と時刻・分数がわかる依頼" } }, required: ["text"], additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+  },
+  {
+    name: "get_agent_context",
+    description: "保存済みイベントとrevision、現在の進行表、最近の変更履歴、公開済み提案、提案のみという操作範囲を読み取ります。dotsを含む認可済みエージェント用です。呼出元がdotsであることは検証しません。",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "publish_change_proposal",
+    description: "最新のget_agent_contextのrevisionに対して変更案を作り、主催者の確認用に保存します。進行表への自動適用はしません。同じ内容の再試行には同じrequestIdを使います。内容やrevisionを変える時は新しいrequestIdを使ってください。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: { type: "string", minLength: 1, maxLength: 2000, description: "変更対象と時刻・分数がわかる依頼" },
+        expectedRevision: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER - 1, description: "直前に読み取ったイベントのrevision" },
+        requestId: { type: "string", minLength: 1, maxLength: 120, description: "イベント内で一意な再試行用ID" },
+      },
+      required: ["text", "expectedRevision", "requestId"], additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   },
 ];
 
@@ -64,6 +85,11 @@ async function runTool(name: string, args: unknown) {
     const state = await getEventState();
     return { ...await proposePlans(state, parsed.text), revision: state.revision, applied: false };
   }
+  if (name === "get_agent_context") {
+    emptyArguments.parse(args ?? {});
+    return getAgentContext();
+  }
+  if (name === "publish_change_proposal") return publishAgentProposal(args);
   throw new HttpError(404, "そのツールはありません。", "unknown_tool");
 }
 

@@ -6,7 +6,9 @@ export async function GET() {
     await getPrivateCallerContext();
     return jsonResponse({
       decisionsConfigured: decisionsConfigured(),
-      dotsConnected: false,
+      // An MCP caller is not proof that the user's dot is configured/running.
+      dotsConnected: null,
+      dotsStatus: "requires-dot-setup",
       mcpAvailable: true,
       protocolVersion: "2026-07-28",
       access: "owner-private",

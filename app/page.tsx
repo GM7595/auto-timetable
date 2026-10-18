@@ -7,6 +7,9 @@ import { computeSchedule, formatTime, generatePlans, parseIssue, parseTime } fro
 import type { EventState, EventSlot, Plan, HistoryEntry } from "@/lib/types";
 import { Timetable } from "@/components/timetable";
 import { ThemeControl } from "@/components/theme-control";
+import { dotSetupInstructions } from "@/lib/dots-instructions";
+import type { AgentProposal } from "@/lib/agent-proposals";
+import type { DecisionsConnectionResult, PlanningResult } from "@/lib/decisions";
 
 type SaveStatus = "loading" | "saved" | "saving" | "local" | "error";
 const STORAGE_KEY = "cue.event.v1";
@@ -105,11 +108,14 @@ export default function Home() {
   const exportMenuRef = useRef<HTMLDetailsElement>(null);
   const [slotEditor, setSlotEditor] = useState<EventSlot | "new" | null>(null), [settingsOpen, setSettingsOpen] = useState(false), [resetOpen, setResetOpen] = useState(false), [newEventOpen, setNewEventOpen] = useState(false);
   const [issueText, setIssueText] = useState(""), [plannedText, setPlannedText] = useState(""), [planning, setPlanning] = useState(false), [plans, setPlans] = useState<Plan[]>([]), [previewPlan, setPreviewPlan] = useState<Plan | null>(null), [planError, setPlanError] = useState("");
-  const [planMeta, setPlanMeta] = useState<{ engine: string; elapsedMs: number; notice?: string } | null>(null), [toast, setToast] = useState("");
+  const [planMeta, setPlanMeta] = useState<Pick<PlanningResult, "engine" | "elapsedMs" | "aiStatus" | "notice" | "decisions"> | null>(null), [toast, setToast] = useState("");
+  const [decisionCheck, setDecisionCheck] = useState<DecisionsConnectionResult | null>(null), [checkingDecision, setCheckingDecision] = useState(false);
+  const [agentProposals, setAgentProposals] = useState<AgentProposal[]>([]), [agentLoadError, setAgentLoadError] = useState("");
   const saveQueue = useRef(Promise.resolve()), serverRevision = useRef(0), planBaseRevision = useRef<number | null>(null), toastTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const schedule = useMemo(() => computeSchedule(state), [state]), visibleSchedule = previewPlan?.schedule ?? schedule;
   const active = schedule.rows.find(x => x.status === "active");
   const errors = schedule.violations.filter(x => x.severity === "error");
+  const decisionHttpStatus = decisionCheck?.decisions?.status === "failed" ? decisionCheck.decisions.httpStatus : undefined;
   function notify(message: string) { setToast(message); if (toastTimeout.current) clearTimeout(toastTimeout.current); toastTimeout.current = setTimeout(() => setToast(""), 4500); }
   function menuAction(action: () => void) {
     for (const ref of [menuRef, exportMenuRef]) if (ref.current) ref.current.open = false;
@@ -152,6 +158,52 @@ export default function Home() {
     void load(); return () => { alive = false; };
   }, []);
 
+  useEffect(() => {
+    if (storage !== "cloud") return;
+    let alive = true;
+    const load = async () => {
+      if (document.visibilityState === "hidden") return;
+      try {
+        const response = await fetch("/api/agent", { cache: "no-store" });
+        if (!response.ok) throw new Error("unavailable");
+        const result = await response.json() as { proposals?: AgentProposal[] };
+        if (alive) { setAgentProposals(Array.isArray(result.proposals) ? result.proposals : []); setAgentLoadError(""); }
+      } catch { if (alive) setAgentLoadError("エージェントの提案を取得できません。時間をおいて再度開いてください。"); }
+    };
+    void load();
+    const interval = setInterval(() => void load(), 15000);
+    const refresh = () => void load();
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { alive = false; clearInterval(interval); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+  }, [storage, state.event.id, state.revision]);
+
+  async function checkDecisionConnection() {
+    if (checkingDecision) return;
+    setCheckingDecision(true);
+    try {
+      const response = await fetch("/api/decisions/check", { method: "POST" });
+      if (!response.ok) throw new Error("unavailable");
+      const result = await response.json() as DecisionsConnectionResult;
+      setDecisionCheck(result); setAiConfigured(result.configured);
+    } catch { setDecisionCheck({ configured: aiConfigured, aiStatus: "fallback", notice: "接続確認を完了できませんでした。少し待って再度お試しください。" }); }
+    finally { setCheckingDecision(false); }
+  }
+
+  function reviewAgentProposal(proposal: AgentProposal) {
+    const current = stateRef.current;
+    if (proposal.eventId !== current.event.id || proposal.baseRevision !== current.revision || saveStatus !== "saved") {
+      notify("進行が更新されています。エージェントに最新の条件で再提案してもらってください。"); return;
+    }
+    if (proposal.result.plans.some(plan => computeSchedule(current, plan.slots).violations.some(v => v.severity === "error"))) {
+      notify("現在の条件で成立しない提案です。最新の条件で再提案してください。"); return;
+    }
+    planBaseRevision.current = proposal.baseRevision;
+    setIssueText(proposal.text); setPlannedText(proposal.text); setPlanError("");
+    setPlans(proposal.result.plans); setPlanMeta(proposal.result);
+    setPreviewPlan(null);
+  }
+
   function commit(updated: EventState, entry: HistoryEntry) {
     const previous = stateRef.current, nextState = { ...updated, revision: previous.revision + 1, history: [entry, ...previous.history].slice(0, 100) };
     stateRef.current = nextState; setState(nextState); setPlans([]); setPreviewPlan(null); setPlanMeta(null); setPlanError("");
@@ -175,10 +227,10 @@ export default function Home() {
     const started = performance.now(), snapshot = stateRef.current; planBaseRevision.current = snapshot.revision;
     try {
       const response = await fetch("/api/plans", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state: snapshot, text }) });
-      const result = await response.json() as { plans?: Plan[]; engine: string; elapsedMs: number; notice?: string; error?: string };
+      const result = await response.json() as PlanningResult & { error?: string };
       if (!response.ok) throw Object.assign(new Error(result.error ?? "条件を読み取れませんでした。"), { userError: response.status < 500 });
       if (stateRef.current.revision !== snapshot.revision) throw Object.assign(new Error("作成中に進行が変更されました。最新の条件で再作成してください。"), { userError: true });
-      setPlans(result.plans ?? []); setPlanMeta({ engine: result.engine, elapsedMs: result.elapsedMs, notice: result.notice });
+      setPlans(result.plans ?? []); setPlanMeta(result);
       if (!result.plans?.length) setPlanError("成立する調整案がありません。固定枠や出演可能時間を確認してください。");
     } catch (error) {
       if (stateRef.current.revision !== snapshot.revision) setPlanError("作成中に進行が変更されました。最新の条件で再作成してください。");
@@ -186,7 +238,7 @@ export default function Home() {
       else {
         const issue = parseIssue(text, snapshot);
         if (!issue) setPlanError("「次の登壇者が15分遅れます」のように、対象と変更する時間を入力してください。現在は遅延・出演可能時刻・時間短縮に対応しています。");
-        else { const generated = generatePlans(snapshot, issue); setPlans(generated); setPlanMeta({ engine: "rules", elapsedMs: Math.round(performance.now() - started), notice: "サーバーに接続できないため、端末内の制約計算を使っています。" }); if (!generated.length) setPlanError("成立する案がありません。固定枠・出演可能時間・音止め時刻を確認してください。"); }
+        else { const generated = generatePlans(snapshot, issue); setPlans(generated); setPlanMeta({ engine: "rules", aiStatus: "fallback", elapsedMs: Math.round(performance.now() - started), notice: "サーバーに接続できないため、端末内の制約計算を使っています。" }); if (!generated.length) setPlanError("成立する案がありません。固定枠・出演可能時間・音止め時刻を確認してください。"); }
       }
     } finally { setPlanning(false); }
   }
@@ -247,9 +299,13 @@ export default function Home() {
         <button className="button primary" type="submit" disabled={planning || !issueText.trim() || !state.slots.length || saveStatus === "loading"}>{planning ? <><Loader2 size={15} className="spin" />確認中</> : "調整案を作る"}</button>
       </form>
       <details className="change-examples"><summary>入力例</summary><div className="example-buttons">{["いまの進行が10分押しています", "次の登壇者が15分遅れます", "全体を10分短縮したい"].map(text => <button type="button" key={text} disabled={planning} onClick={() => { updateIssue(text); document.getElementById("issue-input")?.focus(); }}>{text}</button>)}</div></details>
+      {agentProposals.some(proposal => proposal.eventId === state.event.id) && <details className="agent-inbox"><summary>エージェントからの提案 · {agentProposals.filter(proposal => proposal.eventId === state.event.id).length}件</summary><div>{agentProposals.filter(proposal => proposal.eventId === state.event.id).map(proposal => {
+        const stale = proposal.baseRevision !== state.revision;
+        return <article key={proposal.id}><p>{proposal.text}</p><small>{new Date(proposal.createdAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })} · {stale ? "更新前の進行表への提案" : proposal.result.engine === "decisions" ? "Decisions APIで比較済み" : "制約計算による候補"}</small><button type="button" className="button secondary small" disabled={stale || planning || saveStatus !== "saved"} onClick={() => reviewAgentProposal(proposal)}>提案を確認</button></article>;
+      })}</div></details>}
       {planError && <p className="form-error" role="alert">{planError}</p>}
       {!!plans.length && <section className="plan-results" aria-label="調整案">
-        <header><h2>調整案</h2><span className="plan-meta">{planMeta?.engine === "decisions" ? "Decisions APIで比較" : "制約計算による候補"}</span><button className="icon-button" aria-label="調整案を閉じる" onClick={() => { setPlans([]); setPreviewPlan(null); setPlanMeta(null); }}><X size={17} /></button></header>
+        <header><h2>調整案</h2><span className="plan-meta">{planMeta?.engine === "decisions" ? `Decisions API · ${planMeta.decisions?.elapsedMs ?? planMeta.elapsedMs}ms` : "制約計算による候補"}</span><button className="icon-button" aria-label="調整案を閉じる" onClick={() => { setPlans([]); setPreviewPlan(null); setPlanMeta(null); }}><X size={17} /></button></header>
         <div className="plan-options">{plans.map(plan => {
           const invalid = plan.schedule.violations.some(violation => violation.severity === "error");
           return <article key={plan.id} className={"plan-option" + (previewPlan?.id === plan.id ? " selected" : "")}>
@@ -284,8 +340,8 @@ export default function Home() {
     {settingsOpen && <EventForm state={state} onClose={() => setSettingsOpen(false)} onSave={next => { commit(next, historyItem("イベント設定を更新", next.event.name + " · " + formatTime(next.event.startTime) + "–" + formatTime(next.event.endTime))); setSettingsOpen(false); notify("イベント設定を更新しました。"); }} />}
     {panel === "history" && <Dialog title="変更履歴" onClose={() => setPanel(null)}><div className="history-list">{state.history.length ? state.history.map(entry => <article key={entry.id}><h3>{entry.title}</h3><time>{new Date(entry.at).toLocaleDateString("ja-JP")} {timeLabel(entry.at)}</time><p>{entry.detail}</p></article>) : <p>まだ変更はありません。</p>}</div></Dialog>}
     {panel === "connections" && <Dialog title="連携・保存" onClose={() => setPanel(null)}><div className="connection-settings">
-      <section><h3>Decisions API <span className="connection-status">{aiConfigured ? "キー設定済み" : "未設定"}</span></h3><p>{aiConfigured ? "成立する候補の比較に使用します。時間条件は通常の計算で検証します。" : "現在は制約計算のみで動作しています。AIによる選択は行っていません。"}</p><a className="text-button" href="https://developers.openai.com/api/docs/guides/decisions" target="_blank" rel="noreferrer">公式ドキュメント<ArrowUpRight size={13} /></a></section>
-      <section><h3>dots / MCP <span className="connection-status">自動監視は未接続</span></h3><p>進行情報の取得と変更案の提案に対応しています。自動での監視・反映は行いません。</p><button className="text-button" onClick={() => void copy(window.location.origin + "/mcp", "MCPのURLをコピーしました。")}>MCPのURLをコピー</button></section>
+      <section><h3>Decisions API <span className="connection-status">{decisionCheck?.aiStatus === "used" ? "接続確認済み" : decisionCheck?.aiStatus === "fallback" ? "接続エラー" : aiConfigured ? "キー設定済み・未確認" : "未設定"}</span></h3><p>成立する候補をgpt-6-lunaで比較します。時間条件はコードで検証します。キー設定済みでも、認証や利用枠の状況によって比較に失敗することがあります。</p>{decisionCheck?.notice && <p role="status">{decisionCheck.notice}{decisionHttpStatus ? `（HTTP ${decisionHttpStatus}）` : ""}</p>}<button type="button" className="button secondary small" disabled={checkingDecision} onClick={() => void checkDecisionConnection()}>{checkingDecision ? <Loader2 size={14} className="spin" aria-hidden="true" /> : <Plug2 size={14} aria-hidden="true" />}{checkingDecision ? "確認中" : "接続を確認"}</button><a className="text-button" href="https://developers.openai.com/api/docs/guides/decisions" target="_blank" rel="noreferrer">公式ドキュメント<ArrowUpRight size={13} /></a></section>
+      <section><h3>dots / MCP <span className="connection-status">{agentProposals.length ? "エージェントの提案を受信" : "dotsで初回設定が必要"}</span></h3><p>dotsが変更連絡を整理して候補を作り、サイトに保存できます。受信した提案は表の上に表示され、主催者が比較して反映します。自動反映はしません。</p><p>「dotsへの指示をコピー」を押し、あなたのdotに送ってください。プラグインの初回接続もdot側で確認してください。MCPの利用だけではdotsの稼働状態は判定できません。</p><div className="connection-actions"><button type="button" className="button secondary small" onClick={() => void copy(dotSetupInstructions(window.location.origin), "dotsへの指示をコピーしました。dotの会話に貼り付けてください。")}>dotsへの指示をコピー</button><button type="button" className="text-button" onClick={() => void copy(window.location.origin + "/mcp", "MCPのURLをコピーしました。")}>MCPのURLをコピー</button></div>{agentLoadError && <p className="form-error">{agentLoadError}</p>}<a className="text-button" href="https://learn.chatgpt.com/docs/dots/getting-started" target="_blank" rel="noreferrer">dotsの設定方法<ArrowUpRight size={13} /></a></section>
       <section><h3>保存</h3><p>{storage === "cloud" ? "イベントはクラウドに保存されています。" : "現在はこの端末に保存されています。"}</p><p>所有者専用の非公開アプリです。URLを共有しても閲覧権限は付与されません。</p></section>
     </div></Dialog>}
     {resetOpen && <Dialog title="サンプルに戻しますか？" subtitle="現在のイベントを置き換えます。必要なら先にバックアップしてください。" onClose={() => setResetOpen(false)}><div className="form-body"><button className="button secondary" onClick={() => exportFile("json")}><ArrowDownToLine size={15} />バックアップを書き出す</button></div><footer className="modal-footer"><span /><div><button className="button secondary" onClick={() => setResetOpen(false)}>キャンセル</button><button className="button primary" onClick={() => { commit(structuredClone(demoState), historyItem("サンプルイベントを読み込み", "Community Day 2026の進行に戻しました。", "create")); setResetOpen(false); setFilter("all"); notify("サンプルイベントに戻しました。"); }}>サンプルに戻す</button></div></footer></Dialog>}

@@ -34,7 +34,7 @@ npm run build
 npm run lint
 npx tsc --noEmit
 node --experimental-strip-types --test lib/planner.test.ts
-node --test lib/decisions.test.mjs lib/page.test.mjs lib/timetable.test.mjs lib/theme.test.mjs
+node --test lib/decisions.test.mjs lib/agent-proposals.test.mjs lib/dots-instructions.test.mjs lib/page.test.mjs lib/timetable.test.mjs lib/theme.test.mjs
 ```
 
 Sitesプラグインを使う場合は、そのインストール・プレビュー・ビルド・公開の手順に従ってください。
@@ -47,8 +47,10 @@ D1の `cue_event_state` テーブルに、イベント全体をJSONとして1件
 | --- | --- |
 | `GET /api/event` | `{ state, storage: "cloud", aiConfigured }` |
 | `PUT /api/event` | 入力 `{ state, expectedRevision }`。保存後の `state` を返す |
-| `POST /api/plans` | 入力 `{ state, text }`。`{ plans, issue, engine, aiStatus, elapsedMs, notice? }` を返す |
-| `GET /api/status` | Decisionsの設定有無、MCPの提供状態、`dotsConnected: false` を返す |
+| `POST /api/plans` | 入力 `{ state, text }`。`{ plans, issue, engine, aiStatus, elapsedMs, notice?, decisions? }` を返す |
+| `POST /api/decisions/check` | 合成データで実APIに接続し、`{ configured, aiStatus, decisions?, notice? }` を返す。イベント情報は送信しない |
+| `GET /api/agent` | 現在のイベントへのエージェント提案を直近5件取得する。進行表は変更しない |
+| `GET /api/status` | Decisionsの設定有無、MCPの提供状態を返す。dots本体の稼働は観測できないため `dotsConnected: null` |
 
 保存時は `state.revision` と `expectedRevision` に同じ、読み込み済みのバージョン番号を指定します。サーバーが原子的に比較し、成功時に1増やします。競合時は `409` と最新の `state` を返し、後から来た変更で上書きしません。
 
@@ -72,6 +74,8 @@ JSONの大きさ・枠数・文字数・時刻・IDの重複などをサーバ�
 
 キー未設定時は `engine: "rules"`、`aiStatus: "not-configured"` として動作します。拒否・タイムアウト・通信失敗・不正なIDの場合も、検証済みのルールによる順序へ切り替え、その理由を表示します。成立する案が1件だけの場合はAPIを呼びません。
 
+「連携・保存」→「接続を確認」は、保存されたイベントを使わずに実APIへ小さな比較リクエストを送ります。キーの存在と接続成功を区別し、認証・権限・利用枠・レート制限・通信失敗を固定メッセージで表示します。実際に比較した場合はモデル名と所要時間、安全な診断情報を返します。上流のエラー本文や秘密情報は返さず、ログにも保存しません。キーを差し替えた場合は、新しい環境設定を反映するためSitesで再デプロイします。
+
 設定名は `.env.example` に記載しています。実際のキーはSitesのサーバー用シークレットとして管理し、リポジトリやブラウザへ渡しません。キーがなくても進行表の編集とルールによる調整案は利用できます。
 
 ## dots / MCPと公開範囲
@@ -81,7 +85,18 @@ JSONの大きさ・枠数・文字数・時刻・IDの重複などをサーバ�
 - `get_event`：保存済みイベントと進行表を取得。
 - `list_open_issues`：現在の制約違反・注意点を取得。
 - `propose_change`：保存済みイベントへの変更案を取得。`applied: false` と元のバージョンを返し、イベントは変更しません。
+- `get_agent_context`：最新のイベント・revision・変更履歴・保存済み提案・操作範囲を取得。
+- `publish_change_proposal`：`{ text, expectedRevision, requestId }` を受け取り、コードで検証・Decisionsで比較した候補を提案として保存。進行表には適用しない。
 
-この実装はdotsから情報を読み、提案を検討するための接続口です。dotsとの実接続、自動監視、定期実行、通知、自動反映は実装していません。
+`publish_change_proposal` の提案はD1の `cue_agent_proposal` に保存されます。作成前・作成後・書き込み時に進行表のrevisionとイベントIDを検査します。同一イベントの同じrequestId・内容・revisionは再試行しても同じ提案を返し、内容の異なる再利用は409にします。上限はイベントごとに100件で、自動削除しません。画面には直近5件が表示され、15秒ごとと画面に戻った時に取得します。古いrevisionへの提案は反映できません。
+
+### dots側の初回設定
+
+1. サイトの「表示・連携設定」→「連携・保存」→「dotsへの指示をコピー」。
+2. 自分のdotの会話に貼り付ける。Sitesが用意したこのサイトのプラグインを使用する。ツールが見つからない場合はそのプラグインを接続する。
+3. dotが `get_agent_context` で現在のイベントを確認する。以後、主催者から変更連絡を受けたら、内容を整理して `publish_change_proposal` でサイトに提案を保存する。
+4. サイト上の「エージェントからの提案」から候補を比較し、主催者が反映する。
+
+MCPツールはdots以外のエージェントでも使えます。MCPアクセスや提案の受信だけで「dots接続済み」「自動監視中」とは表示しません。dots本体で責任を割り当てる初回操作が必要です。外部メール・フォーム監視や定期実行は、対象と頻度の指定・必要な接続なしには開始しません。進行表の自動確定や第三者への通知機能もありません。これらを設定しない限り、dotsは会話で受けた変更連絡を処理する運用です。
 
 公開先は所有者だけが利用する非公開Sitesを前提にします。ブラウザとMCPのアクセス制御にはSitesの認証境界を使い、1件のイベントを共有します。ユーザー別のデータ分離や公開閲覧者向けの権限設計はありません。URLをコピーしても他の人へアクセス権は付与されません。公開時はD1の `DB` バインド、マイグレーション、MCP機能をSites経由で設定してください。
