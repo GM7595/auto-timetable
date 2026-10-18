@@ -14,6 +14,17 @@ export const MAX_MEMBER_ROLES = 12;
 export const MAX_MEMBER_NAME_LENGTH = 160;
 export const MAX_MEMBER_ROLE_LENGTH = 40;
 
+/** Preserve legacy names whole; never guess where a surname or stage name ends. */
+export function getMemberNameParts(member: SlotMember): { familyName: string; givenName: string } {
+  if (member.familyName === undefined && member.givenName === undefined) return { familyName: "", givenName: member.name };
+  return { familyName: member.familyName ?? "", givenName: member.givenName ?? "" };
+}
+
+/** The canonical participation name for explicitly entered name parts. */
+export function formatMemberName(parts: { familyName: string; givenName: string }): string {
+  return [parts.familyName.trim(), parts.givenName.trim()].filter(Boolean).join(" ");
+}
+
 /** One emoji grapheme, including modifiers, ZWJ sequences, flags, and keycaps. */
 export function isMemberRoleIcon(value: string): boolean {
   if (typeof value !== "string" || !value || value.length > 32 || value !== value.trim()) return false;

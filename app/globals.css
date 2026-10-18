@@ -381,7 +381,7 @@ input,select,textarea { min-width:0; }
 .member-editor-hint { display:flex; align-items:center; gap:4px; flex:1 1 200px; margin:0; color:var(--secondary); font-size:12px; }
 .member-editor-table-frame { position:relative; isolation:isolate; margin:0 0 11px; border:1px solid var(--border); border-radius:5px; }
 .member-editor-table { width:100%; table-layout:fixed; border-collapse:collapse; font-size:12px; }
-.member-editor-table .member-editor-name-column { width:42%; }
+.member-editor-table .member-editor-name-column { width:58%; }
 .member-editor-table .member-editor-action-column { width:42px; }
 .member-editor-table-no-roles .member-editor-name-column { width:auto; }
 .member-editor-table th { padding:7px 9px; text-align:left; color:var(--secondary); background:var(--surface-subtle); font-size:11px; font-weight:500; }
@@ -400,13 +400,14 @@ input,select,textarea { min-width:0; }
 .member-editor-row[data-drop-position="after"]>td { box-shadow:inset 0 -2px 0 var(--primary); }
 .member-editor-name-row { display:flex; align-items:center; gap:8px; color:var(--secondary); }
 .member-editor-name-row>svg { flex-shrink:0; }
+.member-editor-name-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; flex:1; min-width:0; }
 .member-editor-drag-handle { flex-shrink:0; width:24px; height:34px; padding:0; cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none; }
 .member-editor-drag-handle[aria-pressed="true"] { cursor:grabbing; color:var(--accent-text); }
 .member-editor-drag-handle:disabled { opacity:.3; cursor:default; }
-.member-editor-name-row>input,.member-role-custom>input { flex:1; width:100%; min-width:0; min-height:36px; padding:6px 9px; color:var(--foreground); background:var(--surface); border:1px solid var(--control-border); border-radius:4px; font-size:13px; }
-.member-editor-name-row>input:focus,.member-role-custom>input:focus { border-color:var(--focus); }
-.member-editor-name-row>input[aria-invalid="true"],.member-editor-name-row>input[aria-invalid="true"]:focus { border-color:var(--danger); }
-.member-editor-name-row>input::placeholder,.member-role-custom>input::placeholder { color:var(--placeholder); opacity:1; }
+.member-editor-name-fields>input,.member-role-custom>input { flex:1; width:100%; min-width:0; min-height:36px; padding:6px 9px; color:var(--foreground); background:var(--surface); border:1px solid var(--control-border); border-radius:4px; font-size:13px; }
+.member-editor-name-fields>input:focus,.member-role-custom>input:focus { border-color:var(--focus); }
+.member-editor-name-fields>input[aria-invalid="true"],.member-editor-name-fields>input[aria-invalid="true"]:focus { border-color:var(--danger); }
+.member-editor-name-fields>input::placeholder,.member-role-custom>input::placeholder { color:var(--placeholder); opacity:1; }
 .member-editor-remove { width:29px; height:32px; }
 .member-editor-remove:hover { color:var(--danger); background:var(--danger-background); }
 .member-editor-actions { display:flex; align-items:center; justify-content:center; gap:1px; }
@@ -456,7 +457,7 @@ input,select,textarea { min-width:0; }
   .member-editor-table-frame[data-dragging="true"] .member-editor-row { transition:none; }
 }
 @media (max-width:760px) {
-  .member-editor-name-row>input,.member-role-custom>input,.member-role-emoji-manual>input { min-height:38px; font-size:16px; }
+  .member-editor-name-fields>input,.member-role-custom>input,.member-role-emoji-manual>input { min-height:38px; font-size:16px; }
   .member-editor-table .member-editor-action-column { width:34px; }
   .member-editor-table th { padding:6px 5px; }
   .member-editor-table td { padding:7px 5px; }
@@ -465,7 +466,8 @@ input,select,textarea { min-width:0; }
   .member-editor-name-row { gap:4px; }
   .member-editor-name-row>svg { display:none; }
   .member-editor-drag-handle { width:22px; height:38px; }
-  .member-editor-name-row>input { padding:6px; }
+  .member-editor-name-fields { gap:4px; }
+  .member-editor-name-fields>input { padding:6px; }
   .member-editor-remove { width:28px; }
   .member-role-picker-toggle { padding:3px 4px; font-size:11px; }
   .member-role-picker { padding:8px; }

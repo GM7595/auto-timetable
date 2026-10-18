@@ -31,11 +31,18 @@ const roleIcons = z.custom<Record<string, string>>().superRefine((value, context
 }).transform((value) => Object.fromEntries(Object.entries(value as Record<string, string>).map(([label, icon]) => [label.trim(), icon.trim()])));
 const members = z.array(z.object({
   name: shortText,
+  familyName: z.string().trim().max(160).optional(),
+  givenName: z.string().trim().max(160).optional(),
   roles: z.array(z.string().trim().min(1).max(40)).max(12)
     .refine((roles) => new Set(roles).size === roles.length, "同じ役割を重複して選択できません。"),
   roleNotRequired: z.boolean().optional(),
   roleIcons: roleIcons.optional(),
 }).strict().superRefine((member, context) => {
+  if (member.familyName !== undefined || member.givenName !== undefined) {
+    if (!member.givenName) context.addIssue({ code: "custom", path: ["givenName"], message: "名を入力してください。" });
+    const fullName = [member.familyName ?? "", member.givenName ?? ""].filter(Boolean).join(" ");
+    if (member.name !== fullName) context.addIssue({ code: "custom", path: ["name"], message: "氏名と姓・名の組み合わせを一致させてください。" });
+  }
   if (member.roles.length === 0 && member.roleNotRequired !== true) {
     context.addIssue({ code: "custom", path: ["roles"], message: "役職を選ぶか「役職なし」を指定してください。" });
   }

@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { GripVertical, Plus, Trash2, UserRound, X } from "lucide-react";
 import type { SlotMember } from "@/lib/types";
-import { getMemberRole, isMemberRoleIcon, MAX_MEMBERS, MAX_MEMBER_NAME_LENGTH, MAX_MEMBER_ROLE_LENGTH, MAX_MEMBER_ROLES, MEMBER_ROLE_PRESETS } from "@/lib/member-roles";
+import { formatMemberName, getMemberNameParts, getMemberRole, isMemberRoleIcon, MAX_MEMBERS, MAX_MEMBER_NAME_LENGTH, MAX_MEMBER_ROLE_LENGTH, MAX_MEMBER_ROLES, MEMBER_ROLE_PRESETS } from "@/lib/member-roles";
 import { RoleEmojiPicker } from "@/components/role-emoji-picker";
 
 type MemberDrag = {
@@ -40,7 +40,7 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
   const [drag, setDrag] = useState<MemberDrag | null>(null);
   const [dragAnnouncement, setDragAnnouncement] = useState("");
   const canAddMember = members.length < MAX_MEMBERS;
-  const missingNames = members.some(member => member.name.trim().length === 0);
+  const missingNames = members.some(member => getMemberNameParts(member).givenName.trim().length === 0);
   const missingRoles = !rolesOptional && members.some(member => member.roles.length === 0);
 
   useLayoutEffect(() => {
@@ -122,7 +122,7 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
   }
 
   function newMember(): SlotMember {
-    return rolesOptional ? { name: "", roles: [], roleNotRequired: true } : { name: "", roles: [] };
+    return rolesOptional ? { name: "", familyName: "", givenName: "", roles: [], roleNotRequired: true } : { name: "", familyName: "", givenName: "", roles: [] };
   }
 
   function copyMember(member: SlotMember, change: Partial<SlotMember> = {}): SlotMember {
@@ -136,6 +136,13 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
   function changeMember(index: number, change: Partial<SlotMember>) {
     cancelDrag();
     onChange(members.map((member, memberIndex) => copyMember(member, memberIndex === index ? change : {})));
+  }
+
+  function changeNamePart(index: number, part: "familyName" | "givenName", value: string) {
+    const parts = { ...getMemberNameParts(members[index]), [part]: value };
+    // Keep draft whitespace intact for IME/editing; only the shared display name
+    // is normalized here. The parent trims the structured parts when saving.
+    changeMember(index, { ...parts, name: formatMemberName(parts) });
   }
 
   function resetPickers() {
@@ -163,7 +170,8 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
   }
 
   function dragName(current: MemberDrag) {
-    return current.members[current.source]?.name.trim() || `メンバー${current.source + 1}`;
+    const member = current.members[current.source];
+    return member && formatMemberName(getMemberNameParts(member)) || `メンバー${current.source + 1}`;
   }
 
   function updateDrag(current: MemberDrag, target: number, pointerY = current.pointerY) {
@@ -361,14 +369,20 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
       <table className={`member-editor-table${rolesOptional ? " member-editor-table-no-roles" : ""}`}>
         <caption className="visually-hidden">メンバーと楽器・役職</caption>
         <colgroup><col className="member-editor-name-column" />{!rolesOptional && <col />}<col className="member-editor-action-column" /></colgroup>
-        <thead><tr><th scope="col">名前 <span className={`required${missingNames ? " required-missing" : ""}`}>必須</span></th>{!rolesOptional && <th scope="col">楽器・役職 <span className={`required${missingRoles ? " required-missing" : ""}`}>必須</span></th>}<th scope="col"><span className="visually-hidden">操作</span></th></tr></thead>
-        <tbody>{members.map((member, index) => <Fragment key={index}>
+        <thead><tr><th scope="col">姓・名 <span className={`required${missingNames ? " required-missing" : ""}`}>名は必須</span></th>{!rolesOptional && <th scope="col">楽器・役職 <span className={`required${missingRoles ? " required-missing" : ""}`}>必須</span></th>}<th scope="col"><span className="visually-hidden">操作</span></th></tr></thead>
+        <tbody>{members.map((member, index) => {
+          const nameParts = getMemberNameParts(member);
+          return <Fragment key={index}>
         <tr ref={node => { rowRefs.current[index] = node; }} className={`member-editor-row${drag?.active && drag.source === index ? " member-editor-row-dragging" : ""}`} style={drag?.active ? { transform: `translateY(${rowOffset(drag, index)}px)` } : undefined} data-drag-kind={drag?.active && drag.source === index ? drag.kind : undefined} data-drop-position={drag?.active && drag.target !== drag.source && drag.target === index ? drag.target < drag.source ? "before" : "after" : undefined}>
           <td><div className="member-editor-name-row">
           <button ref={node => { handleRefs.current[index] = node; }} className="icon-button member-editor-drag-handle" type="button" aria-label={`メンバー${index + 1}をドラッグして並び替え`} title="ドラッグして並び替え" aria-describedby={`${id}-drag-instructions`} aria-pressed={drag?.active && drag.source === index || false} disabled={members.length < 2} onPointerDown={event => startPointerDrag(event, index)} onPointerMove={movePointerDrag} onPointerUp={endPointerDrag} onPointerCancel={event => { if (dragRef.current?.pointerId === event.pointerId) cancelDrag(); }} onLostPointerCapture={event => { if (dragRef.current?.pointerId === event.pointerId) cancelDrag(); }} onBlur={() => { if (dragRef.current?.kind === "keyboard") cancelDrag(); }} onKeyDown={event => keyDrag(event, index)}><GripVertical size={15} aria-hidden="true" /></button>
           <UserRound size={15} aria-hidden="true" />
-          <label className="visually-hidden" htmlFor={`${id}-name-${index}`}>メンバー{index + 1}の名前</label>
-          <input id={`${id}-name-${index}`} aria-label={`メンバー${index + 1}の名前`} required aria-invalid={member.name.trim().length === 0} value={member.name} maxLength={MAX_MEMBER_NAME_LENGTH} placeholder="名前" onChange={event => changeMember(index, { name: event.target.value })} />
+          <div className="member-editor-name-fields">
+            <label className="visually-hidden" htmlFor={`${id}-family-name-${index}`}>メンバー{index + 1}の姓</label>
+            <input id={`${id}-family-name-${index}`} aria-label={`メンバー${index + 1}の姓`} aria-invalid={false} value={nameParts.familyName} maxLength={MAX_MEMBER_NAME_LENGTH} placeholder="姓" onChange={event => changeNamePart(index, "familyName", event.target.value)} />
+            <label className="visually-hidden" htmlFor={`${id}-given-name-${index}`}>メンバー{index + 1}の名</label>
+            <input id={`${id}-given-name-${index}`} aria-label={`メンバー${index + 1}の名`} required aria-invalid={nameParts.givenName.trim().length === 0} value={nameParts.givenName} maxLength={MAX_MEMBER_NAME_LENGTH} placeholder="名" onChange={event => changeNamePart(index, "givenName", event.target.value)} />
+          </div>
           </div></td>
           {!rolesOptional && <td><div className="member-editor-roles">
           {member.roles.map(role => {
@@ -435,7 +449,8 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
           </div>}
           {member.roles.length >= MAX_MEMBER_ROLES && <p className="member-role-limit">役職は1人につき{MAX_MEMBER_ROLES}個までです。</p>}
         </div></td></tr>}
-      </Fragment>)}</tbody>
+      </Fragment>;
+      })}</tbody>
       </table>
     </div>}
     <button className="text-button member-editor-add" type="button" disabled={!canAddMember} title={!canAddMember ? `メンバーは${MAX_MEMBERS}人までです。` : undefined} onClick={() => {

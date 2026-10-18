@@ -14,7 +14,7 @@ import type { DecisionsConnectionResult, PlanningResult } from "@/lib/decisions"
 import type { ChangeRequest } from "@/lib/change-requests";
 import { getEventTiming, getTimedSchedule } from "@/lib/event-timing";
 import { MemberEditor } from "@/components/member-editor";
-import { getMemberRole, getSlotMembers, isMemberRoleIcon } from "@/lib/member-roles";
+import { formatMemberName, getMemberNameParts, getMemberRole, getSlotMembers, isMemberRoleIcon } from "@/lib/member-roles";
 import type { SlotMember } from "@/lib/types";
 
 type SaveStatus = "loading" | "saved" | "saving" | "local" | "error";
@@ -70,7 +70,7 @@ function SlotForm({ slot, currentStart, defaultChangeoverMinutes = 5, onSave, on
   const [changeoverValue, setChangeoverValue] = useState(String(slot?.changeoverMinutes ?? defaultChangeoverMinutes));
   const missingGroup = !groupValue.trim();
   const invalidDuration = !validMinutes(durationValue, 1, 240), invalidChangeover = !validMinutes(changeoverValue, 0, 90);
-  const incompleteMemberIndex = members.findIndex(member => !member.name.trim() || (!rolesOptional && !member.roles.some(role => role.trim())));
+  const incompleteMemberIndex = members.findIndex(member => !getMemberNameParts(member).givenName.trim() || (!rolesOptional && !member.roles.some(role => role.trim())));
   return <Dialog title={slot ? "進行枠を編集" : "進行枠を追加"} subtitle="出演者・所要時間・準備条件をまとめて管理します。" onClose={onClose}>
     <form onSubmit={e => {
       e.preventDefault(); const data = new FormData(e.currentTarget);
@@ -78,19 +78,21 @@ function SlotForm({ slot, currentStart, defaultChangeoverMinutes = 5, onSave, on
       if (earliest && latest && parseTime(earliest) >= parseTime(latest)) { setError("出演可能時間の終了は開始より後にしてください。"); return; }
       const title = String(data.get("title") || "").trim();
       const group = String(data.get("group") || "").trim();
-      if (!group) { setError("アーティスト・グループ名を入力してください。"); return; }
+      if (!group) { setError("出演者・グループを入力してください。"); return; }
       const duration = String(data.get("duration") ?? ""), changeover = String(data.get("changeover") ?? "");
       if (!validMinutes(duration, 1, 240)) { setError("本編時間は1〜240分の整数で入力してください。"); return; }
       if (!validMinutes(changeover, 0, 90)) { setError("準備・転換は0〜90分の整数で入力してください。"); return; }
       // The switch applies to this entire member table. Per-member flags remain
       // the storage format so old events and saved proposals stay compatible.
       const cleanedMembers = members.map(member => {
+        const parts = getMemberNameParts(member);
+        const hasNameParts = member.familyName !== undefined || member.givenName !== undefined;
         const roles = rolesOptional ? [] : [...new Set(member.roles.map(role => role.trim()).filter(Boolean))];
         const roleIcons = Object.fromEntries(Object.entries(member.roleIcons ?? {}).filter(([role, icon]) => roles.includes(role.trim()) && isMemberRoleIcon(icon.trim())).map(([role, icon]) => [role.trim(), icon.trim()]));
-        return { name: member.name.trim(), roles, ...(Object.keys(roleIcons).length ? { roleIcons } : {}), ...(rolesOptional ? { roleNotRequired: true } : {}) };
+        return { name: hasNameParts ? formatMemberName(parts) : member.name.trim(), ...(hasNameParts ? { familyName: parts.familyName.trim(), givenName: parts.givenName.trim() } : {}), roles, ...(Object.keys(roleIcons).length ? { roleIcons } : {}), ...(rolesOptional ? { roleNotRequired: true } : {}) };
       });
-      if (cleanedMembers.some(member => !member.name)) { setError("メンバーの名前を入力してください。不要な行は削除してください。"); return; }
-      if (cleanedMembers.some(member => !member.roles.length && !member.roleNotRequired)) { setError("名前と楽器・役職の両方を入力してください。役職が不要なら「役職なし」を選んでください。"); return; }
+      if (cleanedMembers.some(member => !getMemberNameParts(member).givenName.trim())) { setError("メンバーの名を入力してください。不要な行は削除してください。"); return; }
+      if (cleanedMembers.some(member => !member.roles.length && !member.roleNotRequired)) { setError("名と楽器・役職の両方を入力してください。役職が不要なら「役職なし」を選んでください。"); return; }
       if (cleanedMembers.length > 30 || cleanedMembers.some(member => member.name.length > 160 || member.roles.length > 12 || member.roles.some(role => role.length > 40))) { setError("メンバーは30人まで、担当は1人12件・各40文字までにしてください。"); return; }
       if (new Set(cleanedMembers.map(member => member.name)).size !== cleanedMembers.length) { setError("同じ名前のメンバーが重複しています。複数の担当は1人にまとめて設定してください。"); return; }
       const locked = data.get("locked") === "on";
@@ -101,8 +103,8 @@ function SlotForm({ slot, currentStart, defaultChangeoverMinutes = 5, onSave, on
       onSave({ id: slot?.id ?? uid(), title, group, kind, durationMinutes: Number(duration), changeoverMinutes: Number(changeover), people: cleanedMembers.map(member => member.name), members: cleanedMembers, equipment: peopleList(String(data.get("equipment") || "")), earliestStart: earliest ? parseTime(earliest) : undefined, latestEnd: latest ? parseTime(latest) : undefined, fixedStart: slot?.status === "done" || slot?.status === "active" ? slot.fixedStart ?? currentStart : locked ? slot?.fixedStart ?? currentStart : undefined, locked, status: slot?.status ?? "planned", energy: slot?.energy ?? 3, notes: String(data.get("notes") || "").trim() });
     }}>
       <div className="form-body">
-        <label className="field">タイトル<input name="title" placeholder="例：プロダクトデモ＆トーク" maxLength={160} value={titleValue} onChange={e => { setTitleValue(e.target.value); setError(""); }} /></label>
-        <label className={`field${missingGroup ? " field-missing" : ""}`}>アーティスト・グループ名<span className="required">必須</span><input name="group" placeholder="例：チーム Horizon" maxLength={160} required aria-invalid={missingGroup} value={groupValue} onChange={e => { setGroupValue(e.target.value); setError(""); }} /></label>
+        <label className="field">タイトル<input name="title" placeholder="未入力の場合は出演者・グループを表示" maxLength={160} value={titleValue} onChange={e => { setTitleValue(e.target.value); setError(""); }} /></label>
+        <label className={`field${missingGroup ? " field-missing" : ""}`}>出演者・グループ<span className="required">必須</span><input name="group" placeholder="例：チーム Horizon" maxLength={160} required aria-invalid={missingGroup} value={groupValue} onChange={e => { setGroupValue(e.target.value); setError(""); }} /></label>
         <MemberEditor members={members} onChange={next => { setMembers(next); setError(""); }} rolesOptional={rolesOptional} onRolesOptionalChange={optional => {
           setError("");
           setRolesOptional(optional);

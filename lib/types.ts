@@ -1,7 +1,12 @@
 export type SlotKind = "talk" | "workshop" | "live" | "break" | "other";
 
 export interface SlotMember {
+  /** Canonical full name, kept in sync with people and any explicit name parts. */
   name: string;
+  /** Optional surname. Absent in legacy name-only entries. */
+  familyName?: string;
+  /** Given name or stage name. Required when either name part is supplied. */
+  givenName?: string;
   /** Multiple instruments or custom event roles, in display order. */
   roles: string[];
   /** Optional custom emoji, keyed by a selected role's exact label. */
