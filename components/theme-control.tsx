@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Monitor, Moon, Sun } from "lucide-react";
 import { normalizeThemePreference, resolveTheme, THEME_STORAGE_KEY, type ThemePreference } from "@/lib/theme";
 
 export function ThemeControl() {
   // Keep the server and first client render identical. The head script applies
-  // the saved colors before paint; this effect then reconciles the menu value.
+  // the saved colors before paint; this effect then reconciles the selected mode.
   const [preference, setPreference] = useState<ThemePreference>("system");
   const preferenceRef = useRef<ThemePreference>("system");
   const mediaRef = useRef<MediaQueryList | null>(null);
@@ -40,16 +41,22 @@ export function ThemeControl() {
     };
   }, []);
 
-  return <div className="theme-control">
-    <label className="theme-control-label" htmlFor="appearance-theme">表示モード</label>
-    <select id="appearance-theme" value={preference} onChange={event => {
-      const next = normalizeThemePreference(event.target.value);
-      apply(next);
-      try { window.localStorage.setItem(THEME_STORAGE_KEY, next); } catch { /* Apply now even if saving is blocked. */ }
-    }}>
-      <option value="system">端末に合わせる</option>
-      <option value="light">ライト</option>
-      <option value="dark">ダーク</option>
-    </select>
+  return <div className="theme-control" role="group" aria-label="表示モード">
+    {([
+      { value: "light", label: "ライトモード", Icon: Sun },
+      { value: "dark", label: "ダークモード", Icon: Moon },
+      { value: "system", label: "端末に合わせる", Icon: Monitor },
+    ] as const).map(({ value, label, Icon }) => <button
+      key={value}
+      type="button"
+      className="icon-button theme-option"
+      title={label}
+      aria-label={label}
+      aria-pressed={preference === value}
+      onClick={() => {
+        apply(value);
+        try { window.localStorage.setItem(THEME_STORAGE_KEY, value); } catch { /* Apply now even if saving is blocked. */ }
+      }}
+    ><Icon size={16} aria-hidden="true" /></button>)}
   </div>;
 }

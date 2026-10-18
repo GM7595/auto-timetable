@@ -314,11 +314,11 @@ export default function Home() {
     <header className="minimal-topbar">
       <span className="minimal-brand">タイテ作成ツール</span>
       <div className="minimal-tools">
-        <button type="button" className="button secondary small new-event-button" disabled={saveStatus === "loading"} onClick={() => menuAction(() => setNewEventOpen(true))}><CalendarPlus size={15} aria-hidden="true" /><span>新しいイベント</span></button>
+        <button type="button" className="button secondary small new-event-button" aria-label="新しいイベント" title="新しいイベント" disabled={saveStatus === "loading"} onClick={() => menuAction(() => setNewEventOpen(true))}><CalendarPlus size={15} aria-hidden="true" /><span>新しいイベント</span></button>
+        <ThemeControl />
         <details className="utility-menu" ref={menuRef}>
           <summary className="icon-button" aria-label="表示・連携設定" title="表示・連携設定"><Settings2 size={18} aria-hidden="true" /></summary>
           <div className="utility-popover">
-            <ThemeControl />
             <button type="button" onClick={() => menuAction(() => setPanel("connections"))}><Plug2 size={15} aria-hidden="true" />連携・保存</button>
             <hr />
             <button type="button" onClick={() => menuAction(() => setResetOpen(true))}><RotateCcw size={15} aria-hidden="true" />サンプルに戻す</button>
