@@ -68,7 +68,7 @@ function SlotForm({ slot, currentStart, defaultChangeoverMinutes = 5, onSave, on
   const [groupValue, setGroupValue] = useState(slot?.group ?? "");
   const [durationValue, setDurationValue] = useState(String(slot?.durationMinutes ?? 20));
   const [changeoverValue, setChangeoverValue] = useState(String(slot?.changeoverMinutes ?? defaultChangeoverMinutes));
-  const missingTitle = !titleValue.trim(), missingGroup = !groupValue.trim();
+  const missingGroup = !groupValue.trim();
   const invalidDuration = !validMinutes(durationValue, 1, 240), invalidChangeover = !validMinutes(changeoverValue, 0, 90);
   const incompleteMemberIndex = members.findIndex(member => !member.name.trim() || (!rolesOptional && !member.roles.some(role => role.trim())));
   return <Dialog title={slot ? "進行枠を編集" : "進行枠を追加"} subtitle="出演者・所要時間・準備条件をまとめて管理します。" onClose={onClose}>
@@ -77,7 +77,6 @@ function SlotForm({ slot, currentStart, defaultChangeoverMinutes = 5, onSave, on
       const earliest = String(data.get("earliest") || ""), latest = String(data.get("latest") || "");
       if (earliest && latest && parseTime(earliest) >= parseTime(latest)) { setError("出演可能時間の終了は開始より後にしてください。"); return; }
       const title = String(data.get("title") || "").trim();
-      if (!title) { setError("タイトルを入力してください。"); return; }
       const group = String(data.get("group") || "").trim();
       if (!group) { setError("アーティスト・グループ名を入力してください。"); return; }
       const duration = String(data.get("duration") ?? ""), changeover = String(data.get("changeover") ?? "");
@@ -102,7 +101,7 @@ function SlotForm({ slot, currentStart, defaultChangeoverMinutes = 5, onSave, on
       onSave({ id: slot?.id ?? uid(), title, group, kind, durationMinutes: Number(duration), changeoverMinutes: Number(changeover), people: cleanedMembers.map(member => member.name), members: cleanedMembers, equipment: peopleList(String(data.get("equipment") || "")), earliestStart: earliest ? parseTime(earliest) : undefined, latestEnd: latest ? parseTime(latest) : undefined, fixedStart: slot?.status === "done" || slot?.status === "active" ? slot.fixedStart ?? currentStart : locked ? slot?.fixedStart ?? currentStart : undefined, locked, status: slot?.status ?? "planned", energy: slot?.energy ?? 3, notes: String(data.get("notes") || "").trim() });
     }}>
       <div className="form-body">
-        <label className={`field${missingTitle ? " field-missing" : ""}`}>タイトル <span className="required">必須</span><input name="title" placeholder="例：プロダクトデモ＆トーク" maxLength={160} required aria-invalid={missingTitle} value={titleValue} onChange={e => { setTitleValue(e.target.value); setError(""); }} /></label>
+        <label className="field">タイトル<input name="title" placeholder="例：プロダクトデモ＆トーク" maxLength={160} value={titleValue} onChange={e => { setTitleValue(e.target.value); setError(""); }} /></label>
         <label className={`field${missingGroup ? " field-missing" : ""}`}>アーティスト・グループ名<span className="required">必須</span><input name="group" placeholder="例：チーム Horizon" maxLength={160} required aria-invalid={missingGroup} value={groupValue} onChange={e => { setGroupValue(e.target.value); setError(""); }} /></label>
         <MemberEditor members={members} onChange={next => { setMembers(next); setError(""); }} rolesOptional={rolesOptional} onRolesOptionalChange={optional => {
           setError("");
@@ -122,7 +121,7 @@ function SlotForm({ slot, currentStart, defaultChangeoverMinutes = 5, onSave, on
         </div></details>
         {error && <p className="form-error" role="alert">{error}</p>}
       </div>
-      <footer className="modal-footer"><div>{slot && onDelete && slot.status === "planned" && <button type="button" className="danger-link" onClick={onDelete}><Trash2 size={15} />この枠を削除</button>}</div><div><button type="button" className="button secondary" onClick={onClose}>キャンセル</button><button className="button primary" type="submit" disabled={missingTitle || missingGroup || invalidDuration || invalidChangeover || incompleteMemberIndex >= 0}><Check size={16} />{slot ? "変更を保存" : "追加する"}</button></div></footer>
+      <footer className="modal-footer"><div>{slot && onDelete && slot.status === "planned" && <button type="button" className="danger-link" onClick={onDelete}><Trash2 size={15} />この枠を削除</button>}</div><div><button type="button" className="button secondary" onClick={onClose}>キャンセル</button><button className="button primary" type="submit" disabled={missingGroup || invalidDuration || invalidChangeover || incompleteMemberIndex >= 0}><Check size={16} />{slot ? "変更を保存" : "追加する"}</button></div></footer>
     </form>
   </Dialog>;
 }
@@ -484,7 +483,7 @@ export default function Home() {
       const anchor = computeSchedule({ ...current, slots }).rows.find(x => x.id === slot.id)?.start;
       slots = slots.map(x => x.id === slot.id ? { ...x, fixedStart: anchor } : x);
     }
-    commit({ ...current, slots }, historyItem(exists ? "進行枠を更新" : "進行枠を追加", slot.title)); setSlotEditor(null); notify(exists ? "進行枠を更新しました。" : "新しい進行枠を追加しました。");
+    commit({ ...current, slots }, historyItem(exists ? "進行枠を更新" : "進行枠を追加", slot.title || slot.group)); setSlotEditor(null); notify(exists ? "進行枠を更新しました。" : "新しい進行枠を追加しました。");
   }
   const filteredRows = visibleSchedule.rows.filter(r => filter === "all" || (filter === "remaining" ? r.status !== "done" : r.status === "done"));
 
@@ -556,7 +555,7 @@ export default function Home() {
         {!!state.slots.length && <footer className="schedule-summary"><span>終了予定 <strong>{formatTime(visibleSchedule.endsAt)}</strong></span><span className={visibleSchedule.bufferMinutes < 0 ? "text-red" : ""}>{visibleSchedule.bufferMinutes >= 0 ? "終了時刻まで " + visibleSchedule.bufferMinutes + "分の余裕" : -visibleSchedule.bufferMinutes + "分超過"}</span></footer>}
       </section>
     </main>
-    {slotEditor !== null && <SlotForm slot={slotEditor === "new" ? null : slotEditor} currentStart={slotEditor === "new" ? undefined : schedule.rows.find(slot => slot.id === slotEditor.id)?.start} defaultChangeoverMinutes={state.event.defaultChangeoverMinutes ?? 5} onClose={() => setSlotEditor(null)} onSave={saveSlot} onDelete={slotEditor !== "new" ? () => { const current = stateRef.current; commit({ ...current, slots: current.slots.filter(slot => slot.id !== slotEditor.id) }, historyItem("進行枠を削除", slotEditor.title)); setSlotEditor(null); notify("進行枠を削除しました。"); } : undefined} />}
+    {slotEditor !== null && <SlotForm slot={slotEditor === "new" ? null : slotEditor} currentStart={slotEditor === "new" ? undefined : schedule.rows.find(slot => slot.id === slotEditor.id)?.start} defaultChangeoverMinutes={state.event.defaultChangeoverMinutes ?? 5} onClose={() => setSlotEditor(null)} onSave={saveSlot} onDelete={slotEditor !== "new" ? () => { const current = stateRef.current; commit({ ...current, slots: current.slots.filter(slot => slot.id !== slotEditor.id) }, historyItem("進行枠を削除", slotEditor.title || slotEditor.group)); setSlotEditor(null); notify("進行枠を削除しました。"); } : undefined} />}
     {settingsOpen && <EventForm state={state} onClose={() => setSettingsOpen(false)} onSave={next => { commit(next, historyItem("イベント設定を更新", next.event.name + " · " + formatTime(next.event.startTime) + "–" + formatTime(next.event.endTime))); setSettingsOpen(false); notify("イベント設定を更新しました。"); }} />}
     {panel === "history" && <Dialog title="変更履歴" onClose={() => setPanel(null)}><div className="history-list">{state.history.length ? state.history.map(entry => <article key={entry.id}><h3>{entry.title}</h3><time>{new Date(entry.at).toLocaleDateString("ja-JP")} {timeLabel(entry.at)}</time><p>{entry.detail}</p></article>) : <p>まだ変更はありません。</p>}</div></Dialog>}
     {panel === "connections" && <Dialog title="連携・保存" onClose={() => setPanel(null)}><div className="connection-settings">

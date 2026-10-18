@@ -28,7 +28,7 @@ export function Timetable({ rows, allRows, originalRows, preview, onEdit }: Time
     <table className="run-table">
       <caption className="run-table-caption">イベントの進行表。転換・準備と待機は、本編とは別の行で表示しています。時刻は日本時間です。</caption>
       <colgroup><col className="run-table-col-time" /><col /><col className="run-table-col-duration" /></colgroup>
-      <thead><tr><th scope="col">時間</th><th scope="col">内容・出演者</th><th scope="col">所要</th></tr></thead>
+      <thead><tr><th scope="col">時間</th><th scope="col">内容</th><th scope="col">所要</th></tr></thead>
       {rows.length ? rows.map(row => {
         // A comparison is an unapplied proposal, never the running event.
         const status = preview ? "planned" : row.status;
@@ -41,6 +41,7 @@ export function Timetable({ rows, allRows, originalRows, preview, onEdit }: Time
         const setup = index === 0 ? 0 : Math.max(0, row.changeoverMinutes);
         const prepEnd = row.changeoverStart + setup;
         const group = row.group.trim();
+        const title = row.title.trim() || group || "名称未設定";
         const members = getSlotMembers(row);
         return <tbody className="run-table-slot" key={row.id}>
           {setup > 0 && <tr className="run-table-transition">
@@ -55,7 +56,7 @@ export function Timetable({ rows, allRows, originalRows, preview, onEdit }: Time
           </tr>}
           <tr aria-current={status === "active" ? "step" : undefined} className={`run-table-main run-table-${status}${changed ? " run-table-changed" : ""}${row.violations.length ? " run-table-invalid" : ""}`}>
             <td className="run-table-time"><TimeRange start={row.start} end={row.end} />{changedTime && original && <span className="run-table-old-time">旧 {formatTime(original.row.start)}–{formatTime(original.row.end)}</span>}</td>
-            <td className="run-table-content"><div className="run-table-title-line">{row.locked && <span className="run-table-fixed" role="img" aria-label="出演時刻を固定" title="出演時刻を固定"><LockKeyhole size={13} aria-hidden="true" /></span>}<strong>{row.title}</strong>{changed && <span className="run-table-change-badge">変更</span>}<button type="button" className="run-table-edit" onClick={() => onEdit(row.id)} aria-label={`${row.title}を編集`} title="編集"><Pencil size={14} aria-hidden="true" /></button></div>{group && group !== row.title && <span className="run-table-group"><UsersRound size={13} aria-hidden="true" /><span>{group}</span></span>}
+            <td className="run-table-content"><div className="run-table-title-line">{row.locked && <span className="run-table-fixed" role="img" aria-label="出演時刻を固定" title="出演時刻を固定"><LockKeyhole size={13} aria-hidden="true" /></span>}<strong>{title}</strong>{changed && <span className="run-table-change-badge">変更</span>}<button type="button" className="run-table-edit" onClick={() => onEdit(row.id)} aria-label={`${title}を編集`} title="編集"><Pencil size={14} aria-hidden="true" /></button></div>{group && group !== title && <span className="run-table-group"><UsersRound size={13} aria-hidden="true" /><span>{group}</span></span>}
               {members.length > 0 && <ul className="run-table-members" aria-label="メンバー">{members.map(member => <li className="run-table-member" key={member.name}>
                 <span className="run-table-member-name"><UserRound size={12} aria-hidden="true" /><span>{member.name}</span></span>
                 {member.roles.map(value => {

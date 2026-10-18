@@ -55,7 +55,7 @@ const eventDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
 
 const slotSchema = z.object({
   id: identifier,
-  title: shortText,
+  title: z.string().trim().max(160),
   group: z.string().max(160),
   kind: z.enum(["talk", "workshop", "live", "break", "other"]),
   durationMinutes: z.number().int().min(1).max(720),
