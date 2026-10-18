@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, Check, LockKeyhole, Pencil } from "lucide-react";
+import { AlertCircle, Check, LockKeyhole, Pencil, UsersRound } from "lucide-react";
 import { formatTime } from "@/lib/planner";
 import type { ScheduledSlot } from "@/lib/types";
 
@@ -55,7 +55,7 @@ export function Timetable({ rows, allRows, originalRows, preview, onEdit }: Time
           </tr>}
           <tr aria-current={status === "active" ? "step" : undefined} className={`run-table-main run-table-${status}${changed ? " run-table-changed" : ""}${row.violations.length ? " run-table-invalid" : ""}`}>
             <td className="run-table-time"><TimeRange start={row.start} end={row.end} />{changedTime && original && <span className="run-table-old-time">旧 {formatTime(original.row.start)}–{formatTime(original.row.end)}</span>}</td>
-            <td className="run-table-content"><div className="run-table-title-line"><strong>{row.title}</strong>{changed && <span className="run-table-change-badge">変更</span>}</div>{group && group !== row.title && <span className="run-table-group">{group}</span>}
+            <td className="run-table-content"><div className="run-table-title-line"><strong>{row.title}</strong>{changed && <span className="run-table-change-badge">変更</span>}</div>{group && group !== row.title && <span className="run-table-group"><UsersRound size={13} aria-hidden="true" /><span>{group}</span></span>}
               {changedOrder && original && <span className="run-table-order">順番 {original.index + 1} → {index + 1}</span>}
               {!!row.violations.length && <ul className="run-table-warnings">{row.violations.map((violation, warningIndex) => <li key={warningIndex}><AlertCircle size={13} /><span>{violation}</span></li>)}</ul>}
             </td>

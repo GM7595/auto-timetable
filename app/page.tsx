@@ -126,18 +126,28 @@ export default function Home() {
   const [clockNow, setClockNow] = useState<number | null>(null), [eventListError, setEventListError] = useState("");
   const switchInFlight = useRef(false);
   const pendingSaves = useRef(0);
+  const [activeProposalId, setActiveProposalId] = useState<string | null>(null), activeProposalRef = useRef<string | null>(null);
+  const [proposalMutationId, setProposalMutationId] = useState<string | null>(null), proposalMutationInFlight = useRef(false);
+  const [undoProposal, setUndoProposal] = useState<AgentProposal | null>(null), proposalInboxGeneration = useRef(0);
   const eventDelivery = receivedEventDelivery?.eventId === state.event.id ? receivedEventDelivery : null;
   const schedule = useMemo(() => computeSchedule(state), [state]);
   const visibleSchedule = previewPlan ? { ...previewPlan.schedule, rows: previewPlan.schedule.rows.map(row => ({ ...row, status: "planned" as const })) } : getTimedSchedule(state, schedule, clockNow ?? Number.NEGATIVE_INFINITY);
   const timing = clockNow === null ? null : getEventTiming(state, schedule, clockNow);
   const errors = schedule.violations.filter(x => x.severity === "error");
   const decisionHttpStatus = decisionCheck?.decisions?.status === "failed" ? decisionCheck.decisions.httpStatus : undefined;
-  function notify(message: string) { setToast(message); if (toastTimeout.current) clearTimeout(toastTimeout.current); toastTimeout.current = setTimeout(() => setToast(""), 4500); }
+  function notify(message: string, undo?: AgentProposal) { setToast(message); setUndoProposal(undo ?? null); if (toastTimeout.current) clearTimeout(toastTimeout.current); toastTimeout.current = setTimeout(() => { setToast(""); setUndoProposal(null); }, undo ? 10000 : 4500); }
   function menuAction(action: () => void) {
     for (const ref of [menuRef, exportMenuRef]) if (ref.current) ref.current.open = false;
     action();
   }
-  function updateIssue(text: string) { setIssueText(text); setPlans([]); setPreviewPlan(null); setPlanMeta(null); setPlanError(""); }
+  function selectProposal(id: string | null) { activeProposalRef.current = id; setActiveProposalId(id); }
+  function closePlans() { setPlans([]); setPreviewPlan(null); setPlanMeta(null); planBaseRevision.current = null; selectProposal(null); }
+  function updateIssue(text: string) { setIssueText(text); closePlans(); setPlanError(""); }
+  function removePlan(id: string) {
+    const remaining = plans.filter(plan => plan.id !== id);
+    if (!remaining.length) closePlans();
+    else { setPlans(remaining); if (previewPlan?.id === id) setPreviewPlan(null); }
+  }
 
   useEffect(() => {
     const menus = [menuRef, exportMenuRef];
@@ -179,12 +189,14 @@ export default function Home() {
     let alive = true;
     const load = async () => {
       if (document.visibilityState === "hidden") return;
+      const generation = proposalInboxGeneration.current;
       try {
         const [response, inboxResponse] = await Promise.all([fetch("/api/agent", { cache: "no-store" }), fetch("/api/changes", { cache: "no-store" })]);
         if (!response.ok || !inboxResponse.ok) throw new Error("unavailable");
         const result = await response.json() as { proposals?: AgentProposal[] };
         const inbox = await inboxResponse.json() as { eventId?: string; requests?: ChangeRequest[]; pendingRequests?: ChangeRequest[]; pendingCount?: number; events?: EventDeliveryStatus | null };
         if (!alive || stateRef.current.event.id !== state.event.id) return;
+        if (generation !== proposalInboxGeneration.current || proposalMutationInFlight.current) return;
         if (inbox.eventId !== state.event.id) { setAgentLoadError("別の画面でイベントが切り替わりました。再読み込みして最新のイベントを開いてください。"); return; }
         if (alive) { setAgentProposals(Array.isArray(result.proposals) ? result.proposals : []); setChangeRequests(Array.isArray(inbox.pendingRequests) ? inbox.pendingRequests : Array.isArray(inbox.requests) ? inbox.requests : []); setPendingChangeCount(Number.isSafeInteger(inbox.pendingCount) && inbox.pendingCount! >= 0 ? inbox.pendingCount! : 0); setEventDelivery(inbox.events ? { ...inbox.events, eventId: state.event.id } : null); setAgentLoadError(""); }
       } catch { if (alive) setAgentLoadError("エージェントの提案を取得できません。時間をおいて再度開いてください。"); }
@@ -246,7 +258,7 @@ export default function Home() {
 
   async function switchEvent(eventId: string) {
     if (eventId === stateRef.current.event.id) { setEventListOpen(false); return; }
-    if (switchInFlight.current || pendingSaves.current > 0 || stateRef.current.revision !== serverRevision.current || planning || planRequestInFlight.current || queueRequestInFlight.current || queueing || saveStatus !== "saved" || storage !== "cloud") return;
+    if (switchInFlight.current || proposalMutationInFlight.current || pendingSaves.current > 0 || stateRef.current.revision !== serverRevision.current || planning || planRequestInFlight.current || queueRequestInFlight.current || queueing || saveStatus !== "saved" || storage !== "cloud") return;
     switchInFlight.current = true; setEventSwitching(true); setEventListError("");
     const snapshot = stateRef.current;
     try {
@@ -255,7 +267,7 @@ export default function Home() {
       if (!response.ok || !result.state || result.state.event.id !== eventId) throw new Error(result.error ?? "イベントを切り替えられませんでした。");
       if (stateRef.current !== snapshot) throw new Error("切り替え中に進行が変更されました。再読み込みして保存状態を確認してください。");
       stateRef.current = result.state; setState(result.state); serverRevision.current = result.state.revision;
-      setPlans([]); setPreviewPlan(null); setPlanMeta(null); setPlanError(""); setIssueText(""); setPlannedText(""); planBaseRevision.current = null;
+      closePlans(); setPlanError(""); setIssueText(""); setPlannedText("");
       setAgentProposals([]); setChangeRequests([]); setPendingChangeCount(0); setEventDelivery(null); setAgentLoadError(""); setFilter("all"); setEventListOpen(false);
       try { localStorage.setItem(STORAGE_KEY, JSON.stringify(result.state)); } catch { /* Cloud state is authoritative. */ }
       notify("イベントを切り替えました。");
@@ -277,7 +289,7 @@ export default function Home() {
 
   async function queueChange() {
     const text = issueText.trim(), snapshot = stateRef.current;
-    if (!text || switchInFlight.current || pendingSaves.current > 0 || queueRequestInFlight.current || planRequestInFlight.current || planning || storage !== "cloud" || saveStatus !== "saved") return;
+    if (!text || proposalMutationInFlight.current || switchInFlight.current || pendingSaves.current > 0 || queueRequestInFlight.current || planRequestInFlight.current || planning || storage !== "cloud" || saveStatus !== "saved") return;
     queueRequestInFlight.current = true; setQueueing(true); setPlanError("");
     if (!queueRetry.current || queueRetry.current.eventId !== snapshot.event.id || queueRetry.current.revision !== snapshot.revision || queueRetry.current.text !== text) queueRetry.current = { eventId: snapshot.event.id, revision: snapshot.revision, text, id: uid() };
     try {
@@ -299,7 +311,8 @@ export default function Home() {
   }
 
   function reviewAgentProposal(proposal: AgentProposal) {
-    if (planRequestInFlight.current || switchInFlight.current || planning) return;
+    if (planRequestInFlight.current || proposalMutationInFlight.current || switchInFlight.current || planning) return;
+    if (activeProposalRef.current === proposal.id) { closePlans(); return; }
     if (queueRequestInFlight.current) { notify("変更の受付中です。完了してから提案を確認してください。"); return; }
     const current = stateRef.current;
     if (proposal.eventId !== current.event.id || proposal.baseRevision > current.revision || saveStatus !== "saved") {
@@ -307,7 +320,7 @@ export default function Home() {
     }
     if (proposal.baseRevision < current.revision) {
       updateIssue(proposal.text);
-      void requestPlans(proposal.text, true, { eventId: proposal.eventId, revision: proposal.baseRevision, text: proposal.text });
+      void requestPlans(proposal.text, true, { eventId: proposal.eventId, revision: proposal.baseRevision, text: proposal.text }, proposal.id);
       return;
     }
     if (proposal.result.plans.some(plan => computeSchedule(current, plan.slots).violations.some(v => v.severity === "error"))) {
@@ -323,14 +336,35 @@ export default function Home() {
       return { ...plan, schedule, shortening: { originalEnd: original.endsAt, targetEnd, requestedMinutes: issue.minutes, achievedMinutes: original.endsAt - schedule.endsAt, shortfallMinutes: Math.max(0, schedule.endsAt - targetEnd), contentReductionMinutes: original.contentMinutes - schedule.contentMinutes, met: schedule.endsAt <= targetEnd && !schedule.violations.some(violation => violation.severity === "error") } };
     });
     setPlans(reviewed); setPlanMeta(proposal.result);
-    setPreviewPlan(null);
+    setPreviewPlan(null); selectProposal(proposal.id);
+  }
+
+  async function setProposalVisibility(proposal: AgentProposal, restore = false) {
+    if (proposalMutationInFlight.current || planRequestInFlight.current || queueRequestInFlight.current || switchInFlight.current || pendingSaves.current > 0 || planning || saveStatus !== "saved" || storage !== "cloud" || proposal.eventId !== stateRef.current.event.id) return;
+    const snapshot = stateRef.current;
+    proposalMutationInFlight.current = true; proposalInboxGeneration.current += 1; setProposalMutationId(proposal.id);
+    try {
+      const response = await fetch("/api/agent", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: restore ? "restore" : "dismiss", proposalId: proposal.id, eventId: snapshot.event.id, expectedRevision: snapshot.revision }) });
+      const result = await response.json() as { proposalId?: string; eventId?: string; dismissed?: boolean; error?: string };
+      if (!response.ok || result.proposalId !== proposal.id || result.eventId !== snapshot.event.id || result.dismissed !== !restore) throw new Error(result.error ?? "提案の状態を更新できませんでした。");
+      if (stateRef.current.event.id !== snapshot.event.id) return;
+      if (restore) {
+        setAgentProposals(previous => previous.some(entry => entry.id === proposal.id) ? previous : [proposal, ...previous]);
+        notify("提案を元に戻しました。");
+      } else {
+        setAgentProposals(previous => previous.filter(entry => entry.id !== proposal.id));
+        if (activeProposalRef.current === proposal.id) closePlans();
+        notify("提案を削除しました。", proposal);
+      }
+    } catch { notify(restore ? "提案を元に戻せませんでした。もう一度お試しください。" : "提案を削除できませんでした。再読み込みして保存状態を確認してください。"); }
+    finally { proposalMutationInFlight.current = false; proposalInboxGeneration.current += 1; setProposalMutationId(null); }
   }
 
   function commit(updated: EventState, entry: HistoryEntry) {
     if (switchInFlight.current) return;
     const previous = stateRef.current, nextState = { ...updated, revision: previous.revision + 1, history: [entry, ...(updated.event.id === previous.event.id ? previous.history : updated.history)].slice(0, 100) };
     if (nextState.event.id !== previous.event.id) { setEventDelivery(null); setPendingChangeCount(0); }
-    stateRef.current = nextState; setState(nextState); setPlans([]); setPreviewPlan(null); setPlanMeta(null); setPlanError("");
+    stateRef.current = nextState; setState(nextState); closePlans(); setPlanError("");
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState)); } catch { notify("端末への保存に失敗しました。バックアップを書き出してください。"); }
     if (storage !== "cloud") { setSaveStatus("local"); return; }
     pendingSaves.current += 1; setSaveStatus("saving");
@@ -346,12 +380,13 @@ export default function Home() {
     });
   }
 
-  async function requestPlans(textOverride?: string, fromReviewLink = false, reviewLink?: ProposalReviewLink) {
+  async function requestPlans(textOverride?: string, fromReviewLink = false, reviewLink?: ProposalReviewLink, sourceProposalId?: string) {
     const text = (textOverride ?? issueText).trim();
-    if (!text || planning || planRequestInFlight.current || queueRequestInFlight.current || switchInFlight.current || pendingSaves.current > 0) return;
+    if (!text || planning || proposalMutationInFlight.current || planRequestInFlight.current || queueRequestInFlight.current || switchInFlight.current || pendingSaves.current > 0) return;
     planRequestInFlight.current = true;
     setPlannedText(text);
-    setPlanning(true); setPlanError(""); setPlans([]); setPreviewPlan(null); setPlanMeta(null);
+    setPlanning(true); setPlanError(""); closePlans();
+    if (sourceProposalId) { proposalMutationInFlight.current = true; proposalInboxGeneration.current += 1; setProposalMutationId(sourceProposalId); }
     const started = performance.now(); let snapshot = stateRef.current, refreshedOldRequest = false;
     try {
       if (reviewLink) {
@@ -366,10 +401,13 @@ export default function Home() {
         snapshot = latest; stateRef.current = latest; setState(latest); serverRevision.current = latest.revision;
       }
       planBaseRevision.current = snapshot.revision;
-      const response = await fetch("/api/plans", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state: snapshot, text }) });
-      const result = await response.json() as PlanningResult & { error?: string };
-      if (!response.ok) throw Object.assign(new Error(result.error ?? "条件を読み取れませんでした。"), { userError: response.status < 500 });
+      const response = await fetch(sourceProposalId ? "/api/agent" : "/api/plans", { method: sourceProposalId ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sourceProposalId ? { action: "refresh", proposalId: sourceProposalId, eventId: snapshot.event.id, expectedRevision: snapshot.revision } : { state: snapshot, text }) });
+      const payload = await response.json() as PlanningResult & { error?: string; proposal?: AgentProposal };
+      if (!response.ok) throw Object.assign(new Error(payload.error ?? "条件を読み取れませんでした。"), { userError: response.status < 500 });
+      const result = sourceProposalId ? payload.proposal?.result : payload;
+      if (!result || sourceProposalId && (payload.proposal?.id !== sourceProposalId || payload.proposal.eventId !== snapshot.event.id || payload.proposal.baseRevision !== snapshot.revision || payload.proposal.text !== text)) throw new Error("invalid_proposal");
       if (stateRef.current !== snapshot) throw Object.assign(new Error("作成中に進行が変更されました。最新の条件で再作成してください。"), { userError: true });
+      if (sourceProposalId && payload.proposal) { const refreshed = payload.proposal; setAgentProposals(previous => previous.map(proposal => proposal.id === refreshed.id ? refreshed : proposal)); selectProposal(sourceProposalId); }
       setPlans(result.plans ?? []); setPlanMeta({ ...result, notice: [fromReviewLink ? refreshedOldRequest ? "更新前の依頼を最新の条件で再比較しました（未反映）。" : "依頼を現在の条件で再比較しました（未反映）。" : null, result.notice].filter(Boolean).join(" ") || undefined });
       if (!result.plans?.length) setPlanError("成立する調整案がありません。固定枠や出演可能時間を確認してください。");
     } catch (error) {
@@ -381,10 +419,10 @@ export default function Home() {
         if (!issue) setPlanError("「次の登壇者が15分遅れます」のように、対象と変更する時間を入力してください。現在は遅延・出演可能時刻・時間短縮に対応しています。");
         else { const generated = generatePlans(snapshot, issue); setPlans(generated); setPlanMeta({ engine: "rules", aiStatus: "fallback", elapsedMs: Math.round(performance.now() - started), notice: "サーバーに接続できないため、端末内の制約計算を使っています。" }); if (!generated.length) setPlanError("成立する案がありません。固定枠・出演可能時間・音止め時刻を確認してください。"); }
       }
-    } finally { planRequestInFlight.current = false; setPlanning(false); }
+    } finally { planRequestInFlight.current = false; setPlanning(false); if (sourceProposalId) { proposalMutationInFlight.current = false; proposalInboxGeneration.current += 1; setProposalMutationId(null); } }
   }
   function applyPlan(plan: Plan) {
-    if (switchInFlight.current) return;
+    if (switchInFlight.current || proposalMutationInFlight.current) return;
     if (planBaseRevision.current !== stateRef.current.revision) { setPlans([]); setPreviewPlan(null); setPlanError("進行が変更されています。最新の条件で調整案を再作成してください。"); return; }
     if (plan.schedule.violations.some(v => v.severity === "error")) { notify("条件違反がある案は反映できません。"); return; }
     commit({ ...stateRef.current, slots: plan.slots }, historyItem(`${plan.title}を反映`, `${plannedText} — ${plan.changes.join("、")}`, "plan")); setIssueText(""); notify("タイムテーブルを更新しました。");
@@ -432,22 +470,22 @@ export default function Home() {
       {errors.length > 0 && <div className="form-error" role="alert"><strong>進行条件を確認してください</strong>{errors.map((error, index) => <p key={index}>{error.message}</p>)}</div>}
       <form className="change-form" onSubmit={event => { event.preventDefault(); void requestPlans(); }}>
         <label htmlFor="issue-input" className="visually-hidden">変更・トラブルの内容</label>
-        <input id="issue-input" value={issueText} onChange={event => updateIssue(event.target.value)} placeholder="変更を入力（例：次の登壇者が15分遅れます）" maxLength={1200} disabled={planning || queueing} autoComplete="off" />
-        <button className="button primary" type="submit" disabled={planning || queueing || !issueText.trim() || !state.slots.length || saveStatus === "loading"}>{planning ? <><Loader2 size={15} className="spin" />確認中</> : "調整案を作る"}</button>
+        <input id="issue-input" value={issueText} onChange={event => updateIssue(event.target.value)} placeholder="変更を入力（例：次の登壇者が15分遅れます）" maxLength={1200} disabled={planning || queueing || !!proposalMutationId} autoComplete="off" />
+        <button className="button primary" type="submit" disabled={planning || queueing || !!proposalMutationId || !issueText.trim() || !state.slots.length || saveStatus === "loading"}>{planning ? <><Loader2 size={15} className="spin" />確認中</> : "調整案を作る"}</button>
       </form>
       <div className="change-assist"><details className="change-examples"><summary>入力例</summary><div className="example-buttons">{["いまの進行が10分押しています", "次の登壇者が15分遅れます", "全体を10分短縮したい"].map(text => <button type="button" key={text} disabled={planning || queueing} onClick={() => { updateIssue(text); document.getElementById("issue-input")?.focus(); }}>{text}</button>)}</div></details><button type="button" className="text-button" disabled={planning || queueing || !issueText.trim() || !state.slots.length || storage !== "cloud" || saveStatus !== "saved"} onClick={() => void queueChange()}>{queueing ? <Loader2 size={14} className="spin" aria-hidden="true" /> : <Bot size={14} aria-hidden="true" />}{queueing ? "受付中" : "dotに依頼"}</button></div>
       {changeRequests.some(request => request.eventId === state.event.id && request.status === "pending") && <details className="agent-inbox"><summary>dotへの依頼 · 未処理{pendingChangeCount}件</summary><div>{changeRequests.filter(request => request.eventId === state.event.id && request.status === "pending").map(request => <article key={request.id}><p>{request.text}</p><small>候補待ち · {new Date(request.createdAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })}</small></article>)}<p className="field-hint">{eventDelivery?.activeSubscriptions ? `イベント購読${eventDelivery.activeSubscriptions}件 · 受信後の提案を待っています。` : "イベント購読が未設定です。dotにイベント監視の指示を送ってください。"}{eventDelivery?.pendingDeliveries ? ` 未通知${eventDelivery.pendingDeliveries}件。` : ""}</p></div></details>}
       {agentProposals.some(proposal => proposal.eventId === state.event.id) && <details className="agent-inbox"><summary>エージェントからの提案 · {agentProposals.filter(proposal => proposal.eventId === state.event.id).length}件</summary><div>{agentProposals.filter(proposal => proposal.eventId === state.event.id).map(proposal => {
         const stale = proposal.baseRevision !== state.revision;
-        return <article key={proposal.id}><p>{proposal.text}</p><small>{new Date(proposal.createdAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })} · {stale ? "更新前の提案 · 最新条件で再比較できます" : proposal.result.engine === "decisions" ? "Decisions APIで比較済み" : "制約計算による候補"}</small><button type="button" className="button secondary small" disabled={planning || queueing || eventSwitching || saveStatus !== "saved" || proposal.baseRevision > state.revision} onClick={() => reviewAgentProposal(proposal)}>{stale ? "最新条件で再比較" : "提案を確認"}</button></article>;
+        return <article key={proposal.id}><p>{proposal.text}</p><small>{new Date(proposal.updatedAt ?? proposal.createdAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })}{proposal.updatedAt ? " 更新" : ""} · {stale ? "更新前の提案 · 最新条件で再比較できます" : proposal.result.engine === "decisions" ? "Decisions APIで比較済み" : "制約計算による候補"}</small><div className="agent-proposal-actions"><button type="button" className="button secondary small" aria-expanded={activeProposalId === proposal.id && plans.length > 0} disabled={planning || queueing || eventSwitching || !!proposalMutationId || saveStatus !== "saved" || proposal.baseRevision > state.revision} onClick={() => reviewAgentProposal(proposal)}>{stale ? "最新条件で再比較" : "提案を確認"}</button><button type="button" className="icon-button proposal-delete" aria-label={`提案を削除：${proposal.text}`} title="提案を削除" disabled={planning || queueing || eventSwitching || !!proposalMutationId || saveStatus !== "saved" || storage !== "cloud"} onClick={() => void setProposalVisibility(proposal)}><Trash2 size={15} aria-hidden="true" /></button></div></article>;
       })}</div></details>}
       {planError && <p className="form-error" role="alert">{planError}</p>}
       {!!plans.length && <section className="plan-results" aria-label="調整案">
-        <header><h2>調整案</h2><span className="plan-meta">{planMeta?.engine === "decisions" ? `Decisions API · ${planMeta.decisions?.elapsedMs ?? planMeta.elapsedMs}ms` : "制約計算による候補"}</span><button className="icon-button" aria-label="調整案を閉じる" onClick={() => { setPlans([]); setPreviewPlan(null); setPlanMeta(null); }}><X size={17} /></button></header>
+        <header><h2>調整案</h2><span className="plan-meta">{planMeta?.engine === "decisions" ? `Decisions API · ${planMeta.decisions?.elapsedMs ?? planMeta.elapsedMs}ms` : "制約計算による候補"}</span><button className="icon-button" aria-label="調整案を閉じる" onClick={closePlans}><X size={17} /></button></header>
         <div className="plan-options">{plans.map(plan => {
           const invalid = plan.schedule.violations.some(violation => violation.severity === "error");
           return <article key={plan.id} className={"plan-option" + (previewPlan?.id === plan.id ? " selected" : "")}>
-            <div className="plan-option-header"><h3>{plan.title}</h3><span>終了 {formatTime(plan.schedule.endsAt)}</span></div>
+            <div className="plan-option-header"><h3>{plan.title}</h3><span>終了 {formatTime(plan.schedule.endsAt)}</span><button type="button" className="icon-button plan-delete" aria-label={`調整案を削除：${plan.title}`} title="この調整案を削除" onClick={() => removePlan(plan.id)}><Trash2 size={14} aria-hidden="true" /></button></div>
             <p>{plan.description}</p>
             {plan.shortening && <p className={plan.shortening.met ? "plan-goal" : "plan-warning"}>目標 {formatTime(plan.shortening.targetEnd)} · {plan.shortening.achievedMinutes >= 0 ? `終演${plan.shortening.achievedMinutes}分短縮` : `終演${-plan.shortening.achievedMinutes}分後ろ倒し`}{plan.shortening.met ? "（達成）" : plan.shortening.shortfallMinutes > 0 ? `（あと${plan.shortening.shortfallMinutes}分不足）` : "（制約違反のため未達）"}<small>演目時間の削減は{plan.shortening.contentReductionMinutes}分</small></p>}
             <details><summary>変更内容 · {plan.changes.length}件</summary><ul>{plan.changes.map((change, index) => <li key={index}>{change}</li>)}</ul></details>
@@ -506,6 +544,6 @@ export default function Home() {
     </div><footer className="modal-footer"><span /><button type="button" className="button primary" disabled={eventSwitching || planning || queueing || saveStatus !== "saved"} onClick={() => { setEventListOpen(false); setNewEventOpen(true); }}><CalendarPlus size={15} aria-hidden="true" />イベントを作成</button></footer></Dialog>}
     {resetOpen && <Dialog title="サンプルに戻しますか？" subtitle="現在のイベントは一覧に残して、新しいサンプルを開きます。" onClose={() => setResetOpen(false)}><div className="form-body"><button className="button secondary" onClick={() => exportFile("json")}><ArrowDownToLine size={15} />バックアップを書き出す</button></div><footer className="modal-footer"><span /><div><button className="button secondary" onClick={() => setResetOpen(false)}>キャンセル</button><button className="button primary" onClick={() => { const sample = structuredClone(demoState); sample.event.id = uid(); commit(sample, historyItem("サンプルイベントを読み込み", "Community Day 2026の進行をコピーしました。", "create")); setResetOpen(false); setFilter("all"); notify("サンプルイベントを開きました。元のイベントは一覧に残っています。"); }}>サンプルに戻す</button></div></footer></Dialog>}
     {newEventOpen && <Dialog title="新しいイベント" subtitle="現在のイベントは一覧に残して、空の表から始めます。" onClose={() => setNewEventOpen(false)}><form onSubmit={event => { event.preventDefault(); const data = new FormData(event.currentTarget), blank = createEmptyState(); blank.event.name = String(data.get("name")).trim(); blank.event.date = String(data.get("date")); blank.event.id = uid(); commit(blank, historyItem("イベントを作成", blank.event.name, "create")); setNewEventOpen(false); setFilter("all"); notify("新しいイベントを作成しました。元のイベントは一覧に残っています。"); }}><div className="form-body"><label className="field">イベント名<input name="name" placeholder="イベント名" required maxLength={160} /></label><label className="field">開催日<input name="date" type="date" required defaultValue={new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date())} /></label><button className="text-button" type="button" onClick={() => exportFile("json")}>現在のイベントをバックアップ</button></div><footer className="modal-footer"><span /><div><button className="button secondary" type="button" onClick={() => setNewEventOpen(false)}>キャンセル</button><button className="button primary" type="submit">作成する</button></div></footer></form></Dialog>}
-    {toast && <div className="toast" role="status"><CheckCircle2 size={17} /><span>{toast}</span><button aria-label="通知を閉じる" onClick={() => setToast("")}><X size={14} /></button></div>}
+    {toast && <div className="toast" role="status"><CheckCircle2 size={17} /><span>{toast}</span>{undoProposal && <button type="button" className="toast-undo" disabled={!!proposalMutationId} onClick={() => void setProposalVisibility(undoProposal, true)}>元に戻す</button>}<button aria-label="通知を閉じる" onClick={() => { setToast(""); setUndoProposal(null); }}><X size={14} /></button></div>}
   </div>;
 }

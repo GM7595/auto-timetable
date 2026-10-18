@@ -1,4 +1,4 @@
-import { listAgentProposals, publishAgentProposal, publishProposalSchema } from "@/lib/agent-proposals";
+import { listAgentProposals, publishAgentProposal, publishProposalSchema, proposalActionSchema, updateAgentProposal } from "@/lib/agent-proposals";
 import { checkBrowserOrigin, errorResponse, getEventState, getPrivateCallerContext, jsonResponse, readJsonBody } from "@/lib/server-store";
 
 export async function GET() {
@@ -21,6 +21,19 @@ export async function POST(request: Request) {
     await getPrivateCallerContext();
     const body = await readJsonBody(request, publishProposalSchema, 32 * 1024);
     return jsonResponse(await publishAgentProposal(body));
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
+
+// Organizer-only presentation actions. Refresh reuses the saved request text;
+// dismissal is recoverable and never deletes the immutable agent receipt.
+export async function PATCH(request: Request) {
+  try {
+    checkBrowserOrigin(request);
+    await getPrivateCallerContext();
+    const body = await readJsonBody(request, proposalActionSchema, 8 * 1024);
+    return jsonResponse(await updateAgentProposal(body));
   } catch (error) {
     return errorResponse(error);
   }

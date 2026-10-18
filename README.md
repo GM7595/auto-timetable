@@ -57,6 +57,7 @@ D1の `cue_event_state` の `primary` 行が現在のイベントを保持し、
 | `POST /api/decisions/check` | 合成データで実APIに接続し、`{ configured, aiStatus, decisions?, notice? }` を返す。イベント情報は送信しない |
 | `GET /api/agent` | 現在のイベントへのエージェント提案を直近5件取得する。進行表は変更しない |
 | `POST /api/agent` | 認可されたクラウドサービス向け。MCPと同じ `{ text, expectedRevision, requestId }` で提案だけを保存する |
+| `PATCH /api/agent` | `{ action: "refresh" \| "dismiss" \| "restore", proposalId, eventId, expectedRevision }`。同じ提案の再比較・削除・元に戻す。タイテは変更しない |
 | `GET /api/changes` | 現在のイベントの変更受付・未処理件数・イベント購読と通知状況を取得。読み取りでAI実行やタイテ更新はしない |
 | `POST /api/changes` | `{ text, expectedRevision, requestId }`（UUID）で変更を受け付ける。タイテは未反映。購読先への通知は受付後に非同期配信 |
 | `GET /api/status` | Decisionsの設定有無、MCPの提供状態を返す。dots本体の稼働は観測できないため `dotsConnected: null` |
@@ -99,7 +100,9 @@ JSONの大きさ・枠数・文字数・時刻・IDの重複などをサーバ�
 - `get_agent_context`：最新のイベント・revision・変更履歴・保存済み提案・`pendingChangeRequests`・操作範囲を取得。
 - `publish_change_proposal`：`{ text, expectedRevision, requestId }` を受け取り、コードで検証・Decisionsで比較した候補を提案として保存。進行表には適用しない。
 
-`publish_change_proposal` の提案はD1の `cue_agent_proposal` に保存されます。作成前・作成後・書き込み時に進行表のrevisionとイベントIDを検査します。同一イベントの同じrequestId・内容・revisionは再試行しても同じ提案を返し、内容の異なる再利用は409にします。上限はイベントごとに100件で、自動削除しません。画面には直近5件が表示され、15秒ごとと画面に戻った時に取得します。古い提案は「最新条件で再比較」から本文を引き継いで再計算します。保存済み候補のrevisionを書き換えたり、自動反映したりしません。
+`publish_change_proposal` の提案はD1の `cue_agent_proposal` に保存されます。作成前・作成後・書き込み時に進行表のrevisionとイベントIDを検査します。同一イベントの同じrequestId・内容・revisionは再試行しても同じ提案を返し、内容の異なる再利用は409にします。上限はイベントごとに100件で、自動削除しません。画面には未削除の直近5件が表示され、15秒ごとと画面に戻った時に取得します。古い提案は「最新条件で再比較」から本文を引き継ぎ、サーバーで再計算して同じ提案IDの表示を更新します。新しいカードは追加しません。同じrevisionへの再試行も同じ比較結果を返します。元の受付・比較結果は残し、`cue_proposal_view` に再比較後の表示と削除状態を保持するので、元リクエストの再試行やdotの処理済み判定を壊しません。イベントrevisionと提案ごとのversionで競合を検査し、遅い比較が削除したカードを復活させることも防ぎます。
+
+各カードのゴミ箱は提案を一覧から外し、「元に戻す」で復元できます。保存済みのタイテや演目は削除しません。「提案を確認」をもう一度押すと、調整案の×と同じく候補・表のプレビューを閉じます。比較中の各候補にもゴミ箱があり、その画面から候補を取り除けます。候補単位の削除は表示だけで、保存済み提案そのものを変更しません。
 
 既存の3ツールしか見えないエージェントも、`get_event`・`list_open_issues`・`propose_change` で利用できます。`reviewUrl` はイベントID・revision・依頼テキストをURLフラグメントに持ちます。APIキー・認証トークン・候補そのものは含みません。依頼内容を含むリンクなので第三者への共有は避けてください。クラウドの最新イベントを取得し、同じイベントなら更新前のリンクでも `/api/plans` で自動的に再比較します。会話内で得られた案の復元ではなく、順位や候補は変わる可能性があります。処理済みフラグメントはURLから除去し、同じ画面で二重に実行しません。別イベント・不正なリンク・取得できない未来のrevisionでは比較しません。取得や比較の途中に状態が変わった場合も中止します。リンクを開いてもイベントや提案は保存せず、主催者が「反映」を押すまで進行表は変わりません。
 

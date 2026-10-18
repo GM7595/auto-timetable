@@ -33,6 +33,19 @@ export const agentProposals = sqliteTable("cue_agent_proposal", {
   index("cue_agent_proposal_event_created").on(table.eventId, table.createdAt),
 ]);
 
+// Presentation lifecycle is separate from the immutable agent receipt. Keeping
+// that receipt preserves retry idempotency and acknowledgement of queued work
+// even after the organizer refreshes or dismisses its visible proposal.
+export const proposalViews = sqliteTable("cue_proposal_view", {
+  proposalId: text("proposal_id").primaryKey(),
+  eventId: text("event_id").notNull(),
+  baseRevision: integer("base_revision"),
+  result: text("result"),
+  updatedAt: text("updated_at").notNull(),
+  dismissedAt: text("dismissed_at"),
+  version: integer("version").notNull().default(0),
+}, (table) => [index("cue_proposal_view_event_dismissed").on(table.eventId, table.dismissedAt)]);
+
 // Change intake is durable but never changes the running order. A matching
 // proposal marks an item handled; there is no destructive acknowledgement step.
 export const changeRequests = sqliteTable("cue_change_request", {
