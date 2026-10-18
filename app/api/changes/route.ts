@@ -7,7 +7,7 @@ export async function GET() {
   try {
     await getPrivateCallerContext();
     const state = await getEventState();
-    return jsonResponse({ ...await listChangeRequests(state.event.id), events: await getEventDeliveryStatus(state.event.id) });
+    return jsonResponse({ ...await listChangeRequests(state.event.id), eventId: state.event.id, events: await getEventDeliveryStatus(state.event.id) });
   } catch (error) {
     return errorResponse(error);
   }
@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     const result = await enqueueChangeRequest(body);
     await prepareChangeRequestEvent(result.request);
     waitUntil(dispatchChangeRequestEvent(result.request).catch(() => { console.error("Event delivery could not be completed"); }));
-    return jsonResponse({ ...result, ...await listChangeRequests(result.request.eventId), events: await getEventDeliveryStatus(result.request.eventId) });
+    return jsonResponse({ ...result, ...await listChangeRequests(result.request.eventId), eventId: result.request.eventId, events: await getEventDeliveryStatus(result.request.eventId) });
   } catch (error) {
     return errorResponse(error);
   }

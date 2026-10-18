@@ -86,6 +86,18 @@ input,select,textarea { min-width:0; }
 .minimal-workspace { width:100%; max-width:1080px; margin:0 auto; padding:27px 24px 32px; }
 .event-heading { display:flex; align-items:center; justify-content:space-between; gap:18px; }
 .event-heading>div:first-child { min-width:0; }
+.event-clock { display:flex; flex-wrap:wrap; align-items:center; gap:6px; color:var(--secondary); font-size:12px; margin-top:8px; }
+.event-clock small { font-size:11px; color:var(--muted); margin-left:5px; }
+.event-clock-active { color:var(--accent-text); }
+.event-library { padding:10px 18px 18px; }
+.event-library-row { display:flex; align-items:center; gap:12px; width:100%; padding:16px 8px; text-align:left; border:0; border-bottom:1px solid var(--border); color:var(--foreground); background:transparent; border-radius:3px; }
+.event-library-row>span:first-of-type { flex:1; min-width:0; }
+.event-library-row strong { display:block; font-size:14px; font-weight:600; overflow-wrap:anywhere; }
+.event-library-row small { display:block; color:var(--secondary); font-size:11px; margin-top:5px; line-height:1.7; }
+.event-library-row:hover { background:var(--surface-hover); }
+.event-library-row.selected { background:var(--surface-selected); }
+.event-library-row:disabled { cursor:default; opacity:.65; }
+.event-library-current { display:inline-flex; align-items:center; gap:3px; color:var(--secondary); font-size:11px; white-space:nowrap; }
 .event-identity { flex:1; }
 .event-title-row { display:flex; align-items:center; gap:6px; }
 .event-heading h1 { color:var(--foreground); font-size:23px; font-weight:650; letter-spacing:-.025em; line-height:1.45; overflow-wrap:anywhere; }
@@ -272,8 +284,10 @@ input,select,textarea { min-width:0; }
   .toast { bottom:18px; gap:7px; padding:10px 12px; font-size:12px; }
 }
 @media (max-width:480px) {
-  .minimal-tools .new-event-button { width:32px; height:32px; padding:0; }
-  .new-event-button>span { display:none; }
+  .minimal-topbar { flex-wrap:wrap; height:auto; min-height:52px; padding-top:9px; padding-bottom:9px; }
+  .minimal-tools { margin-left:auto; }
+  .minimal-tools .new-event-button,.minimal-tools .event-list-button { width:32px; height:32px; padding:0; }
+  .new-event-button>span,.event-list-button>span { display:none; }
 }
 @media (max-width:370px) {
   .minimal-topbar,.minimal-workspace { padding-left:12px; padding-right:12px; }

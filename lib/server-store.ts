@@ -118,9 +118,9 @@ export function checkBrowserOrigin(request: Request) {
 export async function getPrivateCallerContext() {
   // The hosting manifest MUST remain owner-private. Sites authenticates browser
   // and MCP callers before forwarding requests. Some authorized service calls
-  // have no user headers, and local preview has none either. This single shared
-  // event deliberately relies on that native boundary, rather than treating a
-  // missing user header as a different tenant. Revisit before any public launch.
+  // have no user headers, and local preview has none either. This shared event
+  // library relies on that native boundary, rather than treating a missing user
+  // header as a different tenant. Revisit before any public launch.
   const user = await getChatGPTUser();
   return { callerKind: user ? "chatgpt-user" : "platform-service-or-preview" } as const;
 }
@@ -170,6 +170,19 @@ function database() {
 }
 
 type StoredRow = { payload: string; revision: number };
+type SavedEventRow = StoredRow & { event_id: string; updated_at: string };
+const MAX_SAVED_EVENTS = 100;
+
+export interface EventSummary {
+  id: string;
+  name: string;
+  date: string;
+  location: string;
+  startTime: number;
+  endTime: number;
+  slotCount: number;
+  updatedAt: string;
+}
 
 function decodeStoredRow(row: StoredRow): EventState {
   let payload: unknown;
@@ -199,12 +212,109 @@ export async function getEventState(): Promise<EventState> {
 }
 
 export async function saveEventState(state: EventState, expectedRevision: number): Promise<{ state: EventState; conflict: boolean }> {
-  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || expectedRevision >= Number.MAX_SAFE_INTEGER) throw new HttpError(422, "保存バージョンを確認してください。", "invalid_revision");
+  validateExpectedRevision(expectedRevision);
   if (state.revision !== expectedRevision) throw new HttpError(422, "保存バージョンが一致しません。再読み込みしてください。", "invalid_revision");
-  await getEventState(); // Seed an empty database before the first write.
+  const current = await getEventState(); // Seed an empty database before the first write.
+  if (current.revision !== expectedRevision) return { state: current, conflict: true };
+  if (state.event.id !== current.event.id && await savedEventRow(state.event.id)) {
+    throw new HttpError(409, "同じIDのイベントが保存済みです。イベント一覧から開いてください。", "event_exists");
+  }
+  await ensureEventCapacity(current.event.id, state.event.id);
   const next: EventState = { ...state, revision: expectedRevision + 1 };
-  const result = await database().prepare("UPDATE cue_event_state SET payload = ?, revision = ?, updated_at = ? WHERE id = ? AND revision = ?")
-    .bind(JSON.stringify(next), next.revision, new Date().toISOString(), "primary", expectedRevision).run();
-  if (result.meta.changes !== 1) return { state: await getEventState(), conflict: true };
+  return persistActiveState(current, next);
+}
+
+function validateExpectedRevision(expectedRevision: number) {
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || expectedRevision >= Number.MAX_SAFE_INTEGER) {
+    throw new HttpError(422, "保存バージョンを確認してください。", "invalid_revision");
+  }
+}
+
+async function savedEventRow(eventId: string): Promise<SavedEventRow | null> {
+  return database().prepare("SELECT event_id, revision, payload, updated_at FROM cue_saved_event WHERE event_id = ?").bind(eventId).first<SavedEventRow>();
+}
+
+function decodeSavedEvent(row: SavedEventRow): EventState {
+  const state = decodeStoredRow(row);
+  if (state.event.id !== row.event_id || !Number.isFinite(Date.parse(row.updated_at))) {
+    throw new HttpError(503, "保存データを読み取れませんでした。管理者に確認してください。", "storage_invalid");
+  }
+  return state;
+}
+
+async function ensureEventCapacity(currentId: string, nextId: string) {
+  const row = await database().prepare(`SELECT COUNT(*) +
+    CASE WHEN EXISTS (SELECT 1 FROM cue_saved_event WHERE event_id = ?) THEN 0 ELSE 1 END +
+    CASE WHEN ? = ? OR EXISTS (SELECT 1 FROM cue_saved_event WHERE event_id = ?) THEN 0 ELSE 1 END AS count
+    FROM cue_saved_event`).bind(currentId, currentId, nextId, nextId).first<{ count: number }>();
+  if (!row || row.count > MAX_SAVED_EVENTS) {
+    throw new HttpError(409, "保存できるイベントは100件までです。既存のイベントを一覧から開いてください。", "event_capacity");
+  }
+}
+
+// D1 batches are transactional. Both archives are guarded by the same global
+// revision as the active pointer; a losing writer cannot overwrite either
+// event's snapshot. No migration-time backfill or request-time DDL is needed.
+async function persistActiveState(current: EventState, next: EventState): Promise<{ state: EventState; conflict: boolean }> {
+  const db = database();
+  const updatedAt = new Date().toISOString();
+  const payload = JSON.stringify(next);
+  const result = await db.batch([
+    db.prepare(`INSERT INTO cue_saved_event (event_id, revision, payload, updated_at)
+      SELECT json_extract(payload, '$.event.id'), revision, payload, updated_at FROM cue_event_state
+      WHERE id = ? AND revision = ? AND json_extract(payload, '$.event.id') = ?
+      ON CONFLICT(event_id) DO UPDATE SET revision = excluded.revision, payload = excluded.payload, updated_at = excluded.updated_at`)
+      .bind("primary", current.revision, current.event.id),
+    db.prepare("UPDATE cue_event_state SET payload = ?, revision = ?, updated_at = ? WHERE id = ? AND revision = ? AND json_extract(payload, '$.event.id') = ?")
+      .bind(payload, next.revision, updatedAt, "primary", current.revision, current.event.id),
+    db.prepare(`INSERT INTO cue_saved_event (event_id, revision, payload, updated_at)
+      SELECT json_extract(payload, '$.event.id'), revision, payload, updated_at FROM cue_event_state
+      WHERE id = ? AND revision = ? AND payload = ? AND updated_at = ?
+      ON CONFLICT(event_id) DO UPDATE SET revision = excluded.revision, payload = excluded.payload, updated_at = excluded.updated_at`)
+      .bind("primary", next.revision, payload, updatedAt),
+  ]);
+  if (result[1]?.meta.changes !== 1) return { state: await getEventState(), conflict: true };
   return { state: next, conflict: false };
+}
+
+export async function listEvents(): Promise<EventSummary[]> {
+  await getEventState();
+  // Project summaries in SQL instead of returning up to 100 full documents
+  // (each may be 512 KiB) into one Workers isolate just to draw a small list.
+  const response = await database().prepare(`WITH documents AS (
+    SELECT event_id, revision, CASE WHEN json_valid(payload) THEN payload ELSE '{}' END AS payload, updated_at FROM cue_saved_event
+      WHERE event_id != (SELECT json_extract(payload, '$.event.id') FROM cue_event_state WHERE id = ?)
+    UNION ALL SELECT json_extract(payload, '$.event.id') AS event_id, revision, payload, updated_at FROM cue_event_state WHERE id = ?
+  ) SELECT event_id, revision, updated_at, json_extract(payload, '$.event.id') AS payload_id,
+    json_extract(payload, '$.revision') AS payload_revision, json_extract(payload, '$.event.name') AS name,
+    json_extract(payload, '$.event.date') AS date, json_extract(payload, '$.event.location') AS location,
+    json_extract(payload, '$.event.startTime') AS startTime, json_extract(payload, '$.event.endTime') AS endTime,
+    CASE WHEN json_type(payload, '$.slots') = 'array' THEN json_array_length(payload, '$.slots') ELSE NULL END AS slotCount
+    FROM documents ORDER BY updated_at DESC, event_id ASC LIMIT ?`).bind("primary", "primary", MAX_SAVED_EVENTS).all<{
+      event_id: string; revision: number; updated_at: string; payload_id: unknown; payload_revision: unknown;
+      name: unknown; date: unknown; location: unknown; startTime: unknown; endTime: unknown; slotCount: unknown;
+    }>();
+  const summarySchema = z.object({ id: identifier, name: shortText, date: eventDate, location: z.string().max(240),
+    startTime: minute, endTime: minute, slotCount: z.number().int().min(0).max(80), updatedAt: z.string().refine(value => Number.isFinite(Date.parse(value))) });
+  return (response.results ?? []).map((row) => {
+    const parsed = summarySchema.safeParse({ id: row.event_id, name: row.name, date: row.date, location: row.location,
+      startTime: row.startTime, endTime: row.endTime, slotCount: row.slotCount, updatedAt: row.updated_at });
+    if (!parsed.success || row.event_id !== row.payload_id || row.revision !== row.payload_revision || parsed.data.endTime <= parsed.data.startTime) {
+      throw new HttpError(503, "保存データを読み取れませんでした。管理者に確認してください。", "storage_invalid");
+    }
+    return parsed.data;
+  });
+}
+
+export async function switchEventState(eventId: string, expectedRevision: number): Promise<{ state: EventState; conflict: boolean }> {
+  validateExpectedRevision(expectedRevision);
+  if (!identifier.safeParse(eventId).success) throw new HttpError(422, "イベントを確認してください。", "invalid_event_id");
+  const current = await getEventState();
+  if (current.revision !== expectedRevision) return { state: current, conflict: true };
+  if (eventId === current.event.id) return { state: current, conflict: false };
+  const row = await savedEventRow(eventId);
+  if (!row) throw new HttpError(404, "このイベントは見つかりません。イベント一覧を再読み込みしてください。", "event_not_found");
+  const saved = decodeSavedEvent(row);
+  await ensureEventCapacity(current.event.id, eventId);
+  return persistActiveState(current, { ...saved, revision: expectedRevision + 1 });
 }

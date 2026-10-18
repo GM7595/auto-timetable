@@ -1,13 +1,22 @@
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
-// The private Site has one shared event. Revision is kept outside the JSON as
-// well so an UPDATE can atomically reject a stale browser tab.
+// The private Site has one active event pointer. Its revision is global across
+// switches so existing browser, inbox, and MCP optimistic guards stay valid.
 export const eventStates = sqliteTable("cue_event_state", {
   id: text("id").primaryKey(),
   revision: integer("revision").notNull(),
   payload: text("payload").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
+
+// Inactive events retain their own contents and history. The active document
+// is authoritative; reads include it even before the first archived snapshot.
+export const savedEvents = sqliteTable("cue_saved_event", {
+  eventId: text("event_id").primaryKey(),
+  revision: integer("revision").notNull(),
+  payload: text("payload").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [index("cue_saved_event_updated").on(table.updatedAt)]);
 
 // An agent can publish a suggestion, never change the saved running order.
 // Request IDs are scoped to an event so retries do not create duplicate cards.

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowDownToLine, ArrowUpRight, Bot, CalendarPlus, Check, CheckCircle2, ChevronDown, Download, FileJson, FileSpreadsheet, History, Loader2, LockKeyhole, Pencil, Play, Plug2, Plus, RotateCcw, Settings2, Trash2, X } from "lucide-react";
+import { ArrowDownToLine, ArrowUpRight, Bot, CalendarDays, CalendarPlus, Check, CheckCircle2, ChevronDown, Clock3, Download, FileJson, FileSpreadsheet, History, Loader2, LockKeyhole, Pencil, Plug2, Plus, RotateCcw, Settings2, Trash2, X } from "lucide-react";
 import { demoState, createEmptyState } from "@/lib/demo";
 import { computeSchedule, formatTime, generatePlans, parseIssue, parseTime } from "@/lib/planner";
 import type { EventState, EventSlot, Plan, HistoryEntry } from "@/lib/types";
@@ -12,9 +12,11 @@ import { parseProposalReviewHash, type ProposalReviewLink } from "@/lib/proposal
 import type { AgentProposal } from "@/lib/agent-proposals";
 import type { DecisionsConnectionResult, PlanningResult } from "@/lib/decisions";
 import type { ChangeRequest } from "@/lib/change-requests";
+import { getEventTiming, getTimedSchedule } from "@/lib/event-timing";
 
 type SaveStatus = "loading" | "saved" | "saving" | "local" | "error";
 type EventDeliveryStatus = { activeSubscriptions: number; pendingDeliveries: number; failedDeliveries?: number; lastDeliveredAt: string | null; lastFailure?: string | null };
+type EventSummary = { id: string; name: string; date: string; location: string; startTime: number; endTime: number; slotCount: number; updatedAt: string };
 const STORAGE_KEY = "cue.event.v1";
 const KIND: Record<EventSlot["kind"], { label: string }> = {
   talk: { label: "トーク" },
@@ -120,9 +122,14 @@ export default function Home() {
   const [changeRequests, setChangeRequests] = useState<ChangeRequest[]>([]), [pendingChangeCount, setPendingChangeCount] = useState(0), [queueing, setQueueing] = useState(false);
   const queueRequestInFlight = useRef(false), queueRetry = useRef<{ eventId: string; revision: number; text: string; id: string } | null>(null);
   const [receivedEventDelivery, setEventDelivery] = useState<(EventDeliveryStatus & { eventId: string }) | null>(null);
+  const [eventListOpen, setEventListOpen] = useState(false), [eventSummaries, setEventSummaries] = useState<EventSummary[]>([]), [eventListLoading, setEventListLoading] = useState(false), [eventSwitching, setEventSwitching] = useState(false);
+  const [clockNow, setClockNow] = useState<number | null>(null), [eventListError, setEventListError] = useState("");
+  const switchInFlight = useRef(false);
+  const pendingSaves = useRef(0);
   const eventDelivery = receivedEventDelivery?.eventId === state.event.id ? receivedEventDelivery : null;
-  const schedule = useMemo(() => computeSchedule(state), [state]), visibleSchedule = previewPlan?.schedule ?? schedule;
-  const active = schedule.rows.find(x => x.status === "active");
+  const schedule = useMemo(() => computeSchedule(state), [state]);
+  const visibleSchedule = previewPlan ? { ...previewPlan.schedule, rows: previewPlan.schedule.rows.map(row => ({ ...row, status: "planned" as const })) } : getTimedSchedule(state, schedule, clockNow ?? Number.NEGATIVE_INFINITY);
+  const timing = clockNow === null ? null : getEventTiming(state, schedule, clockNow);
   const errors = schedule.violations.filter(x => x.severity === "error");
   const decisionHttpStatus = decisionCheck?.decisions?.status === "failed" ? decisionCheck.decisions.httpStatus : undefined;
   function notify(message: string) { setToast(message); if (toastTimeout.current) clearTimeout(toastTimeout.current); toastTimeout.current = setTimeout(() => setToast(""), 4500); }
@@ -176,7 +183,9 @@ export default function Home() {
         const [response, inboxResponse] = await Promise.all([fetch("/api/agent", { cache: "no-store" }), fetch("/api/changes", { cache: "no-store" })]);
         if (!response.ok || !inboxResponse.ok) throw new Error("unavailable");
         const result = await response.json() as { proposals?: AgentProposal[] };
-        const inbox = await inboxResponse.json() as { requests?: ChangeRequest[]; pendingRequests?: ChangeRequest[]; pendingCount?: number; events?: EventDeliveryStatus | null };
+        const inbox = await inboxResponse.json() as { eventId?: string; requests?: ChangeRequest[]; pendingRequests?: ChangeRequest[]; pendingCount?: number; events?: EventDeliveryStatus | null };
+        if (!alive || stateRef.current.event.id !== state.event.id) return;
+        if (inbox.eventId !== state.event.id) { setAgentLoadError("別の画面でイベントが切り替わりました。再読み込みして最新のイベントを開いてください。"); return; }
         if (alive) { setAgentProposals(Array.isArray(result.proposals) ? result.proposals : []); setChangeRequests(Array.isArray(inbox.pendingRequests) ? inbox.pendingRequests : Array.isArray(inbox.requests) ? inbox.requests : []); setPendingChangeCount(Number.isSafeInteger(inbox.pendingCount) && inbox.pendingCount! >= 0 ? inbox.pendingCount! : 0); setEventDelivery(inbox.events ? { ...inbox.events, eventId: state.event.id } : null); setAgentLoadError(""); }
       } catch { if (alive) setAgentLoadError("エージェントの提案を取得できません。時間をおいて再度開いてください。"); }
     };
@@ -210,6 +219,50 @@ export default function Home() {
     return () => window.removeEventListener("hashchange", review);
   }, [storage, saveStatus, state.event.id, state.revision, planning, queueing]);
 
+  useEffect(() => {
+    const tick = () => setClockNow(Date.now());
+    tick();
+    const interval = setInterval(tick, 1000);
+    window.addEventListener("focus", tick);
+    document.addEventListener("visibilitychange", tick);
+    return () => { clearInterval(interval); window.removeEventListener("focus", tick); document.removeEventListener("visibilitychange", tick); };
+  }, []);
+
+  useEffect(() => {
+    if (!eventListOpen || storage !== "cloud") return;
+    let alive = true;
+    setEventListLoading(true); setEventListError("");
+    void (async () => {
+      try {
+        const response = await fetch("/api/events", { cache: "no-store" });
+        const result = await response.json() as { events?: EventSummary[] };
+        if (!response.ok || !Array.isArray(result.events)) throw new Error("unavailable");
+        if (alive) setEventSummaries(result.events);
+      } catch { if (alive) setEventListError("イベント一覧を読み込めませんでした。閉じてからもう一度開いてください。"); }
+      finally { if (alive) setEventListLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, [eventListOpen, storage, state.event.id, state.revision]);
+
+  async function switchEvent(eventId: string) {
+    if (eventId === stateRef.current.event.id) { setEventListOpen(false); return; }
+    if (switchInFlight.current || pendingSaves.current > 0 || stateRef.current.revision !== serverRevision.current || planning || planRequestInFlight.current || queueRequestInFlight.current || queueing || saveStatus !== "saved" || storage !== "cloud") return;
+    switchInFlight.current = true; setEventSwitching(true); setEventListError("");
+    const snapshot = stateRef.current;
+    try {
+      const response = await fetch("/api/events", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ eventId, expectedRevision: serverRevision.current }) });
+      const result = await response.json() as { state?: EventState; error?: string };
+      if (!response.ok || !result.state || result.state.event.id !== eventId) throw new Error(result.error ?? "イベントを切り替えられませんでした。");
+      if (stateRef.current !== snapshot) throw new Error("切り替え中に進行が変更されました。再読み込みして保存状態を確認してください。");
+      stateRef.current = result.state; setState(result.state); serverRevision.current = result.state.revision;
+      setPlans([]); setPreviewPlan(null); setPlanMeta(null); setPlanError(""); setIssueText(""); setPlannedText(""); planBaseRevision.current = null;
+      setAgentProposals([]); setChangeRequests([]); setPendingChangeCount(0); setEventDelivery(null); setAgentLoadError(""); setFilter("all"); setEventListOpen(false);
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(result.state)); } catch { /* Cloud state is authoritative. */ }
+      notify("イベントを切り替えました。");
+    } catch (error) { setEventListError(error instanceof Error ? error.message : "イベントを切り替えられませんでした。"); }
+    finally { switchInFlight.current = false; setEventSwitching(false); }
+  }
+
   async function checkDecisionConnection() {
     if (checkingDecision) return;
     setCheckingDecision(true);
@@ -224,7 +277,7 @@ export default function Home() {
 
   async function queueChange() {
     const text = issueText.trim(), snapshot = stateRef.current;
-    if (!text || queueRequestInFlight.current || planRequestInFlight.current || planning || storage !== "cloud" || saveStatus !== "saved") return;
+    if (!text || switchInFlight.current || pendingSaves.current > 0 || queueRequestInFlight.current || planRequestInFlight.current || planning || storage !== "cloud" || saveStatus !== "saved") return;
     queueRequestInFlight.current = true; setQueueing(true); setPlanError("");
     if (!queueRetry.current || queueRetry.current.eventId !== snapshot.event.id || queueRetry.current.revision !== snapshot.revision || queueRetry.current.text !== text) queueRetry.current = { eventId: snapshot.event.id, revision: snapshot.revision, text, id: uid() };
     try {
@@ -246,10 +299,16 @@ export default function Home() {
   }
 
   function reviewAgentProposal(proposal: AgentProposal) {
+    if (planRequestInFlight.current || switchInFlight.current || planning) return;
     if (queueRequestInFlight.current) { notify("変更の受付中です。完了してから提案を確認してください。"); return; }
     const current = stateRef.current;
-    if (proposal.eventId !== current.event.id || proposal.baseRevision !== current.revision || saveStatus !== "saved") {
-      notify("進行が更新されています。エージェントに最新の条件で再提案してもらってください。"); return;
+    if (proposal.eventId !== current.event.id || proposal.baseRevision > current.revision || saveStatus !== "saved") {
+      notify("現在のイベントの保存状態を確認して、もう一度お試しください。"); return;
+    }
+    if (proposal.baseRevision < current.revision) {
+      updateIssue(proposal.text);
+      void requestPlans(proposal.text, true, { eventId: proposal.eventId, revision: proposal.baseRevision, text: proposal.text });
+      return;
     }
     if (proposal.result.plans.some(plan => computeSchedule(current, plan.slots).violations.some(v => v.severity === "error"))) {
       notify("現在の条件で成立しない提案です。最新の条件で再提案してください。"); return;
@@ -268,29 +327,32 @@ export default function Home() {
   }
 
   function commit(updated: EventState, entry: HistoryEntry) {
-    const previous = stateRef.current, nextState = { ...updated, revision: previous.revision + 1, history: [entry, ...previous.history].slice(0, 100) };
+    if (switchInFlight.current) return;
+    const previous = stateRef.current, nextState = { ...updated, revision: previous.revision + 1, history: [entry, ...(updated.event.id === previous.event.id ? previous.history : updated.history)].slice(0, 100) };
     if (nextState.event.id !== previous.event.id) { setEventDelivery(null); setPendingChangeCount(0); }
     stateRef.current = nextState; setState(nextState); setPlans([]); setPreviewPlan(null); setPlanMeta(null); setPlanError("");
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState)); } catch { notify("端末への保存に失敗しました。バックアップを書き出してください。"); }
     if (storage !== "cloud") { setSaveStatus("local"); return; }
-    setSaveStatus("saving");
+    pendingSaves.current += 1; setSaveStatus("saving");
     saveQueue.current = saveQueue.current.then(async () => {
       try {
         const response = await fetch("/api/event", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state: { ...nextState, revision: serverRevision.current }, expectedRevision: serverRevision.current }) });
         const result = await response.json() as { state?: EventState; error?: string };
         if (!response.ok) throw new Error(response.status === 409 ? "別の画面で更新されています。変更をJSONで保存してから再読み込みしてください。" : result.error ?? "クラウドへの保存に失敗しました。変更はこの端末に残っています。");
-        serverRevision.current = result.state?.revision ?? nextState.revision; setSaveStatus("saved");
+        serverRevision.current = result.state?.revision ?? nextState.revision;
+        if (pendingSaves.current === 1) setSaveStatus(serverRevision.current === stateRef.current.revision ? "saved" : "error");
       } catch (error) { setSaveStatus("error"); notify(error instanceof Error ? error.message : "保存できませんでした。"); }
+      finally { pendingSaves.current -= 1; }
     });
   }
 
   async function requestPlans(textOverride?: string, fromReviewLink = false, reviewLink?: ProposalReviewLink) {
     const text = (textOverride ?? issueText).trim();
-    if (!text || planning || planRequestInFlight.current || queueRequestInFlight.current) return;
+    if (!text || planning || planRequestInFlight.current || queueRequestInFlight.current || switchInFlight.current || pendingSaves.current > 0) return;
     planRequestInFlight.current = true;
     setPlannedText(text);
     setPlanning(true); setPlanError(""); setPlans([]); setPreviewPlan(null); setPlanMeta(null);
-    const started = performance.now(); let snapshot = stateRef.current;
+    const started = performance.now(); let snapshot = stateRef.current, refreshedOldRequest = false;
     try {
       if (reviewLink) {
         const response = await fetch("/api/event", { cache: "no-store" });
@@ -299,18 +361,19 @@ export default function Home() {
         if (!latest?.event || !Array.isArray(latest.slots) || !Number.isSafeInteger(latest.revision)) throw new Error("unavailable");
         if (stateRef.current !== snapshot) throw Object.assign(new Error("確認中に進行が変更されました。最新の条件で再作成してください。"), { userError: true });
         if (latest.event.id !== reviewLink.eventId) throw Object.assign(new Error("別のイベントへの依頼です。現在のイベントでリンクを作り直してください。"), { userError: true });
-        if (latest.revision !== reviewLink.revision) throw Object.assign(new Error("このリンクは更新前の進行表への依頼です。進行表を再読み込みし、最新の条件でリンクを作り直してください。"), { userError: true });
+        if (latest.revision < reviewLink.revision) throw Object.assign(new Error("この依頼より新しい進行表を取得できませんでした。少し待ってもう一度開いてください。"), { userError: true });
+        refreshedOldRequest = latest.revision > reviewLink.revision;
         snapshot = latest; stateRef.current = latest; setState(latest); serverRevision.current = latest.revision;
       }
       planBaseRevision.current = snapshot.revision;
       const response = await fetch("/api/plans", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state: snapshot, text }) });
       const result = await response.json() as PlanningResult & { error?: string };
       if (!response.ok) throw Object.assign(new Error(result.error ?? "条件を読み取れませんでした。"), { userError: response.status < 500 });
-      if (stateRef.current.revision !== snapshot.revision) throw Object.assign(new Error("作成中に進行が変更されました。最新の条件で再作成してください。"), { userError: true });
-      setPlans(result.plans ?? []); setPlanMeta({ ...result, notice: [fromReviewLink ? "dotからの依頼を現在の条件で再比較しました（未反映）。" : null, result.notice].filter(Boolean).join(" ") || undefined });
+      if (stateRef.current !== snapshot) throw Object.assign(new Error("作成中に進行が変更されました。最新の条件で再作成してください。"), { userError: true });
+      setPlans(result.plans ?? []); setPlanMeta({ ...result, notice: [fromReviewLink ? refreshedOldRequest ? "更新前の依頼を最新の条件で再比較しました（未反映）。" : "依頼を現在の条件で再比較しました（未反映）。" : null, result.notice].filter(Boolean).join(" ") || undefined });
       if (!result.plans?.length) setPlanError("成立する調整案がありません。固定枠や出演可能時間を確認してください。");
     } catch (error) {
-      if (stateRef.current.revision !== snapshot.revision) setPlanError("作成中に進行が変更されました。最新の条件で再作成してください。");
+      if (stateRef.current !== snapshot) setPlanError("作成中に進行が変更されました。最新の条件で再作成してください。");
       else if (error instanceof Error && "userError" in error && error.userError) setPlanError(error.message);
       else if (fromReviewLink) setPlanError("最新の進行表で再比較できませんでした。接続を確認し、進行表を再読み込みしてください。");
       else {
@@ -321,16 +384,10 @@ export default function Home() {
     } finally { planRequestInFlight.current = false; setPlanning(false); }
   }
   function applyPlan(plan: Plan) {
+    if (switchInFlight.current) return;
     if (planBaseRevision.current !== stateRef.current.revision) { setPlans([]); setPreviewPlan(null); setPlanError("進行が変更されています。最新の条件で調整案を再作成してください。"); return; }
     if (plan.schedule.violations.some(v => v.severity === "error")) { notify("条件違反がある案は反映できません。"); return; }
     commit({ ...stateRef.current, slots: plan.slots }, historyItem(`${plan.title}を反映`, `${plannedText} — ${plan.changes.join("、")}`, "plan")); setIssueText(""); notify("タイムテーブルを更新しました。");
-  }
-  function finishActive() {
-    if (saveStatus === "loading") return;
-    const current = stateRef.current, currentSchedule = computeSchedule(current), index = current.slots.findIndex(x => x.status === "active"), nextIndex = current.slots.findIndex((x, i) => i > index && x.status === "planned");
-    const slots = current.slots.map((x, i) => i === index ? { ...x, status: "done" as const, fixedStart: currentSchedule.rows.find(r => r.id === x.id)?.start } : i === nextIndex ? { ...x, status: "active" as const, fixedStart: currentSchedule.rows.find(r => r.id === x.id)?.start } : x);
-    commit({ ...current, slots }, historyItem(index >= 0 ? `${current.slots[index].title}が終了` : "イベントを開始", nextIndex >= 0 ? `次の進行：${current.slots[nextIndex].title}` : "すべての進行枠が終了しました。", "progress"));
-    notify(nextIndex >= 0 ? `「${current.slots[nextIndex].title}」へ進みました。` : "すべての進行が終了しました。お疲れさまでした。");
   }
   function exportFile(type: "csv" | "json") {
     const quote = (s: string | number) => '"' + String(s).replaceAll('"', '""') + '"';
@@ -353,7 +410,8 @@ export default function Home() {
     <header className="minimal-topbar">
       <span className="minimal-brand">タイテ作成ツール</span>
       <div className="minimal-tools">
-        <button type="button" className="button secondary small new-event-button" aria-label="新しいイベント" title="新しいイベント" disabled={saveStatus === "loading"} onClick={() => menuAction(() => setNewEventOpen(true))}><CalendarPlus size={15} aria-hidden="true" /><span>新しいイベント</span></button>
+        <button type="button" className="button secondary small event-list-button" aria-label="イベント一覧" title="イベント一覧" disabled={saveStatus === "loading"} onClick={() => menuAction(() => setEventListOpen(true))}><CalendarDays size={15} aria-hidden="true" /><span>イベント</span></button>
+        <button type="button" className="button secondary small new-event-button" aria-label="新しいイベント" title="新しいイベント" disabled={saveStatus !== "saved" && saveStatus !== "local" || eventSwitching || planning || queueing} onClick={() => menuAction(() => setNewEventOpen(true))}><CalendarPlus size={15} aria-hidden="true" /><span>新しいイベント</span></button>
         <ThemeControl />
         <details className="utility-menu" ref={menuRef}>
           <summary className="icon-button" aria-label="表示・連携設定" title="表示・連携設定"><Settings2 size={18} aria-hidden="true" /></summary>
@@ -370,6 +428,7 @@ export default function Home() {
         <div className="event-identity"><div className="event-title-row"><h1>{state.event.name}</h1><button type="button" className="icon-button event-edit" aria-label="イベント設定" title="イベント設定を編集" disabled={saveStatus === "loading"} onClick={() => setSettingsOpen(true)}><Pencil size={16} aria-hidden="true" /></button></div><p className="event-details">{dateLabel(state.event.date)} · {formatTime(state.event.startTime)}–{formatTime(state.event.endTime)}{state.event.location && " · " + state.event.location}</p></div>
         <div className="event-actions"><span className={"save-status" + (saveStatus === "error" ? " error" : "")} role="status">{saveStatus === "loading" || saveStatus === "saving" ? <Loader2 size={13} className="spin" aria-hidden="true" /> : saveStatus === "saved" ? <CheckCircle2 size={13} aria-hidden="true" /> : null}{saveStatus === "loading" ? "読み込み中" : saveStatus === "saving" ? "保存中" : saveStatus === "saved" ? "保存済み" : saveStatus === "error" ? "クラウド未保存" : "端末に保存"}</span><button type="button" className="text-button" disabled={saveStatus === "loading"} onClick={() => setPanel("history")}><History size={15} aria-hidden="true" />変更履歴</button></div>
       </div>
+      {timing && <p className={"event-clock event-clock-" + timing.phase} title="日本時間の現在時刻とタイムテーブルから自動表示します。実際の遅れは変更欄から反映してください。"><Clock3 size={13} aria-hidden="true" /><span>{timing.phase === "active" ? `進行中 · ${timing.label}` : timing.label}</span><small>予定時刻から自動表示 · 日本時間</small></p>}
       {errors.length > 0 && <div className="form-error" role="alert"><strong>進行条件を確認してください</strong>{errors.map((error, index) => <p key={index}>{error.message}</p>)}</div>}
       <form className="change-form" onSubmit={event => { event.preventDefault(); void requestPlans(); }}>
         <label htmlFor="issue-input" className="visually-hidden">変更・トラブルの内容</label>
@@ -380,7 +439,7 @@ export default function Home() {
       {changeRequests.some(request => request.eventId === state.event.id && request.status === "pending") && <details className="agent-inbox"><summary>dotへの依頼 · 未処理{pendingChangeCount}件</summary><div>{changeRequests.filter(request => request.eventId === state.event.id && request.status === "pending").map(request => <article key={request.id}><p>{request.text}</p><small>候補待ち · {new Date(request.createdAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })}</small></article>)}<p className="field-hint">{eventDelivery?.activeSubscriptions ? `イベント購読${eventDelivery.activeSubscriptions}件 · 受信後の提案を待っています。` : "イベント購読が未設定です。dotにイベント監視の指示を送ってください。"}{eventDelivery?.pendingDeliveries ? ` 未通知${eventDelivery.pendingDeliveries}件。` : ""}</p></div></details>}
       {agentProposals.some(proposal => proposal.eventId === state.event.id) && <details className="agent-inbox"><summary>エージェントからの提案 · {agentProposals.filter(proposal => proposal.eventId === state.event.id).length}件</summary><div>{agentProposals.filter(proposal => proposal.eventId === state.event.id).map(proposal => {
         const stale = proposal.baseRevision !== state.revision;
-        return <article key={proposal.id}><p>{proposal.text}</p><small>{new Date(proposal.createdAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })} · {stale ? "更新前の進行表への提案" : proposal.result.engine === "decisions" ? "Decisions APIで比較済み" : "制約計算による候補"}</small><button type="button" className="button secondary small" disabled={stale || planning || queueing || saveStatus !== "saved"} onClick={() => reviewAgentProposal(proposal)}>提案を確認</button></article>;
+        return <article key={proposal.id}><p>{proposal.text}</p><small>{new Date(proposal.createdAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })} · {stale ? "更新前の提案 · 最新条件で再比較できます" : proposal.result.engine === "decisions" ? "Decisions APIで比較済み" : "制約計算による候補"}</small><button type="button" className="button secondary small" disabled={planning || queueing || eventSwitching || saveStatus !== "saved" || proposal.baseRevision > state.revision} onClick={() => reviewAgentProposal(proposal)}>{stale ? "最新条件で再比較" : "提案を確認"}</button></article>;
       })}</div></details>}
       {planError && <p className="form-error" role="alert">{planError}</p>}
       {!!plans.length && <section className="plan-results" aria-label="調整案">
@@ -400,7 +459,6 @@ export default function Home() {
       </section>}
       <section className="timetable-shell" aria-label="イベントの進行表">
         <div className="table-toolbar"><span className="table-count">タイムテーブル · {state.slots.length}枠</span><div className="table-tools" role="group" aria-label="タイムテーブルの操作">
-          {!active && state.slots.some(x => x.status === "planned") && !previewPlan && <button type="button" className="button secondary small" disabled={saveStatus === "loading"} onClick={finishActive}><Play size={14} aria-hidden="true" />進行を開始</button>}
           <button type="button" className="button secondary small" disabled={saveStatus === "loading"} onClick={() => setSlotEditor("new")}><Plus size={15} aria-hidden="true" />枠を追加</button>
           <details className="export-menu" ref={exportMenuRef}>
             <summary className="button secondary small" aria-label="書き出し"><Download size={15} aria-hidden="true" /><span>書き出し</span><ChevronDown size={12} aria-hidden="true" /></summary>
@@ -412,7 +470,7 @@ export default function Home() {
           <label className="table-filter"><span className="visually-hidden">表示する進行枠</span><select value={filter} onChange={event => setFilter(event.target.value)}><option value="all">すべて</option><option value="remaining">未完了</option><option value="done">終了済み</option></select></label>
         </div></div>
         {previewPlan && <div className="preview-strip"><span>{previewPlan.title} · 未反映のプレビュー</span><button type="button" className="text-button" onClick={() => setPreviewPlan(null)}>元の表に戻す</button></div>}
-        <Timetable rows={filteredRows} allRows={visibleSchedule.rows} originalRows={schedule.rows} preview={!!previewPlan} onEdit={id => { if (saveStatus !== "loading") setSlotEditor(state.slots.find(slot => slot.id === id) ?? null); }} onFinishActive={finishActive} />
+        <Timetable rows={filteredRows} allRows={visibleSchedule.rows} originalRows={schedule.rows} preview={!!previewPlan} onEdit={id => { if (saveStatus !== "loading" && !eventSwitching) setSlotEditor(state.slots.find(slot => slot.id === id) ?? null); }} />
         {!!state.slots.length && <footer className="schedule-summary"><span>終了予定 <strong>{formatTime(visibleSchedule.endsAt)}</strong></span><span className={visibleSchedule.bufferMinutes < 0 ? "text-red" : ""}>{visibleSchedule.bufferMinutes >= 0 ? "終了時刻まで " + visibleSchedule.bufferMinutes + "分の余裕" : -visibleSchedule.bufferMinutes + "分超過"}</span></footer>}
       </section>
     </main>
@@ -439,8 +497,15 @@ export default function Home() {
       </section>
       <section><h3>保存</h3><p>{storage === "cloud" ? "イベントはクラウドに保存されています。" : "現在はこの端末に保存されています。"}</p><p>所有者専用の非公開アプリです。URLを共有しても閲覧権限は付与されません。</p></section>
     </div></Dialog>}
-    {resetOpen && <Dialog title="サンプルに戻しますか？" subtitle="現在のイベントを置き換えます。必要なら先にバックアップしてください。" onClose={() => setResetOpen(false)}><div className="form-body"><button className="button secondary" onClick={() => exportFile("json")}><ArrowDownToLine size={15} />バックアップを書き出す</button></div><footer className="modal-footer"><span /><div><button className="button secondary" onClick={() => setResetOpen(false)}>キャンセル</button><button className="button primary" onClick={() => { commit(structuredClone(demoState), historyItem("サンプルイベントを読み込み", "Community Day 2026の進行に戻しました。", "create")); setResetOpen(false); setFilter("all"); notify("サンプルイベントに戻しました。"); }}>サンプルに戻す</button></div></footer></Dialog>}
-    {newEventOpen && <Dialog title="新しいイベント" subtitle="現在のイベントを置き換えて、空の表から始めます。" onClose={() => setNewEventOpen(false)}><form onSubmit={event => { event.preventDefault(); const data = new FormData(event.currentTarget), blank = createEmptyState(); blank.event.name = String(data.get("name")).trim(); blank.event.id = uid(); commit(blank, historyItem("イベントを作成", blank.event.name, "create")); setNewEventOpen(false); setFilter("all"); notify("新しいイベントを作成しました。"); }}><div className="form-body"><label className="field">イベント名<input name="name" placeholder="イベント名" required maxLength={160} /></label><button className="text-button" type="button" onClick={() => exportFile("json")}>現在のイベントをバックアップ</button></div><footer className="modal-footer"><span /><div><button className="button secondary" type="button" onClick={() => setNewEventOpen(false)}>キャンセル</button><button className="button primary" type="submit">作成する</button></div></footer></form></Dialog>}
+    {eventListOpen && <Dialog title="イベント一覧" subtitle="イベントごとにタイテと変更履歴を保存します。" onClose={() => { if (!eventSwitching) setEventListOpen(false); }}><div className="event-library">
+      {storage !== "cloud" ? <p className="field-hint">端末内のイベントを表示しています。イベントの切り替えにはクラウドへの接続が必要です。</p> : eventListLoading ? <p className="field-hint" role="status">読み込み中…</p> : null}
+      {eventListError && <p className="form-error" role="alert">{eventListError}</p>}
+      {(storage === "cloud" ? eventSummaries : [{ ...state.event, slotCount: state.slots.length, updatedAt: "" }]).map(event => <button type="button" className={"event-library-row" + (event.id === state.event.id ? " selected" : "")} key={event.id} disabled={eventSwitching || planning || queueing || saveStatus !== "saved"} onClick={() => void switchEvent(event.id)}><CalendarDays size={18} aria-hidden="true" /><span><strong>{event.name}</strong><small>{dateLabel(event.date)} · {formatTime(event.startTime)}–{formatTime(event.endTime)} · {event.slotCount}枠{event.location ? ` · ${event.location}` : ""}</small></span>{event.id === state.event.id ? <span className="event-library-current"><Check size={14} aria-hidden="true" />表示中</span> : <ArrowUpRight size={16} aria-hidden="true" />}</button>)}
+      {eventSwitching && <p className="field-hint" role="status">イベントを切り替えています…</p>}
+      {storage === "cloud" && saveStatus !== "saved" && <p className="field-hint">現在のイベントの保存が完了すると切り替えられます。</p>}
+    </div><footer className="modal-footer"><span /><button type="button" className="button primary" disabled={eventSwitching || planning || queueing || saveStatus !== "saved"} onClick={() => { setEventListOpen(false); setNewEventOpen(true); }}><CalendarPlus size={15} aria-hidden="true" />イベントを作成</button></footer></Dialog>}
+    {resetOpen && <Dialog title="サンプルに戻しますか？" subtitle="現在のイベントは一覧に残して、新しいサンプルを開きます。" onClose={() => setResetOpen(false)}><div className="form-body"><button className="button secondary" onClick={() => exportFile("json")}><ArrowDownToLine size={15} />バックアップを書き出す</button></div><footer className="modal-footer"><span /><div><button className="button secondary" onClick={() => setResetOpen(false)}>キャンセル</button><button className="button primary" onClick={() => { const sample = structuredClone(demoState); sample.event.id = uid(); commit(sample, historyItem("サンプルイベントを読み込み", "Community Day 2026の進行をコピーしました。", "create")); setResetOpen(false); setFilter("all"); notify("サンプルイベントを開きました。元のイベントは一覧に残っています。"); }}>サンプルに戻す</button></div></footer></Dialog>}
+    {newEventOpen && <Dialog title="新しいイベント" subtitle="現在のイベントは一覧に残して、空の表から始めます。" onClose={() => setNewEventOpen(false)}><form onSubmit={event => { event.preventDefault(); const data = new FormData(event.currentTarget), blank = createEmptyState(); blank.event.name = String(data.get("name")).trim(); blank.event.date = String(data.get("date")); blank.event.id = uid(); commit(blank, historyItem("イベントを作成", blank.event.name, "create")); setNewEventOpen(false); setFilter("all"); notify("新しいイベントを作成しました。元のイベントは一覧に残っています。"); }}><div className="form-body"><label className="field">イベント名<input name="name" placeholder="イベント名" required maxLength={160} /></label><label className="field">開催日<input name="date" type="date" required defaultValue={new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date())} /></label><button className="text-button" type="button" onClick={() => exportFile("json")}>現在のイベントをバックアップ</button></div><footer className="modal-footer"><span /><div><button className="button secondary" type="button" onClick={() => setNewEventOpen(false)}>キャンセル</button><button className="button primary" type="submit">作成する</button></div></footer></form></Dialog>}
     {toast && <div className="toast" role="status"><CheckCircle2 size={17} /><span>{toast}</span><button aria-label="通知を閉じる" onClick={() => setToast("")}><X size={14} /></button></div>}
   </div>;
 }
