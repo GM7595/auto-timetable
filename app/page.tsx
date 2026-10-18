@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowDownToLine, ArrowUpRight, Bot, CalendarDays, CalendarPlus, Check, CheckCircle2, ChevronDown, Clock3, Download, FileJson, FileSpreadsheet, History, Loader2, LockKeyhole, MapPin, Pencil, Plug2, Plus, RotateCcw, Settings2, Trash2, X } from "lucide-react";
+import { ArrowDownToLine, ArrowUpRight, Bot, CalendarDays, CalendarPlus, Check, CheckCircle2, ChevronDown, Clock3, Download, FileJson, FileSpreadsheet, FileText, History, Loader2, LockKeyhole, MapPin, Pencil, Plug2, Plus, RotateCcw, Settings2, Trash2, WandSparkles, X } from "lucide-react";
 import { demoState, createEmptyState } from "@/lib/demo";
 import { computeSchedule, formatTime, generatePlans, parseIssue, parseTime } from "@/lib/planner";
 import type { EventState, EventSlot, Plan, HistoryEntry } from "@/lib/types";
@@ -174,6 +174,7 @@ export default function Home() {
   const [activeProposalId, setActiveProposalId] = useState<string | null>(null), activeProposalRef = useRef<string | null>(null);
   const [proposalMutationId, setProposalMutationId] = useState<string | null>(null), proposalMutationInFlight = useRef(false);
   const [undoProposal, setUndoProposal] = useState<AgentProposal | null>(null), proposalInboxGeneration = useRef(0);
+  const exportInFlight = useRef(false), [exporting, setExporting] = useState<"pdf" | "xlsx" | null>(null);
   const eventDelivery = receivedEventDelivery?.eventId === state.event.id ? receivedEventDelivery : null;
   const schedule = useMemo(() => computeSchedule(state), [state]);
   const visibleSchedule = previewPlan ? { ...previewPlan.schedule, rows: previewPlan.schedule.rows.map(row => ({ ...row, status: "planned" as const })) } : getTimedSchedule(state, schedule, clockNow ?? Number.NEGATIVE_INFINITY);
@@ -477,6 +478,21 @@ export default function Home() {
     const content = type === "json" ? JSON.stringify(state, null, 2) : "\uFEFF" + ["開始,終了,タイトル,出演者・グループ,カテゴリー,本編(分),転換(分),メンバー,設備,メモ", ...schedule.rows.map(r => [formatTime(r.start), formatTime(r.end), r.title, r.group, KIND[r.kind].label, r.durationMinutes, r.changeoverMinutes, getSlotMembers(r).map(member => member.name + (member.roles.length ? ` (${member.roles.map(role => member.roleIcons && Object.hasOwn(member.roleIcons, role) ? `${getMemberRole(role, member.roleIcons).icon} ${role}` : role).join(" / ")})` : "")).join(" / "), r.equipment.join(" / "), r.notes].map(quote).join(","))].join("\r\n");
     const url = URL.createObjectURL(new Blob([content], { type: type === "json" ? "application/json" : "text/csv;charset=utf-8" })), a = document.createElement("a"); a.href = url; a.download = `timetable-${state.event.date}.${type}`; a.click(); URL.revokeObjectURL(url); notify(type === "csv" ? "進行表をCSVで書き出しました。" : "イベントのバックアップを書き出しました。");
   }
+  async function exportDocument(type: "pdf" | "xlsx") {
+    if (exportInFlight.current) return;
+    const snapshot = structuredClone(stateRef.current);
+    exportInFlight.current = true; setExporting(type);
+    try {
+      const { createDocumentExport } = await import("@/lib/export-files");
+      const blob = await createDocumentExport(snapshot, type);
+      const url = URL.createObjectURL(blob), a = document.createElement("a");
+      a.href = url; a.download = `timetable-${snapshot.event.date}.${type}`;
+      try { a.click(); } finally { setTimeout(() => URL.revokeObjectURL(url), 1000); }
+      notify(type === "pdf" ? "進行表をPDFで書き出しました。" : "進行表をExcelで書き出しました。");
+    } catch {
+      notify(`${type === "pdf" ? "PDF" : "Excel"}を書き出せませんでした。通信状況を確認して、もう一度お試しください。`);
+    } finally { exportInFlight.current = false; setExporting(null); }
+  }
   async function copy(text: string, success: string) { try { await navigator.clipboard.writeText(text); notify(success); } catch { notify("クリップボードを利用できません。ブラウザのURLをコピーしてください。"); } }
   function saveSlot(slot: EventSlot) {
     const current = stateRef.current, exists = current.slots.some(x => x.id === slot.id);
@@ -513,12 +529,15 @@ export default function Home() {
       </div>
       {timing && <p className={"event-clock event-clock-" + timing.phase} title="日本時間の現在時刻とタイムテーブルから自動表示します。実際の遅れは変更欄から反映してください。"><Clock3 size={13} aria-hidden="true" /><span>{timing.phase === "active" ? `進行中 · ${timing.label}` : timing.label}</span><small>予定時刻から自動表示 · 日本時間</small></p>}
       {errors.length > 0 && <div className="form-error" role="alert"><strong>進行条件を確認してください</strong>{errors.map((error, index) => <p key={index}>{error.message}</p>)}</div>}
+      <section className="change-section" aria-labelledby="change-section-title">
+      <h2 id="change-section-title"><WandSparkles size={16} aria-hidden="true" />進行を調整</h2>
       <form className="change-form" onSubmit={event => { event.preventDefault(); void requestPlans(); }}>
         <label htmlFor="issue-input" className="visually-hidden">変更・トラブルの内容</label>
         <input id="issue-input" value={issueText} onChange={event => updateIssue(event.target.value)} placeholder="変更を入力（例：次の登壇者が15分遅れます）" maxLength={1200} disabled={planning || queueing || !!proposalMutationId} autoComplete="off" />
         <button className="button primary" type="submit" disabled={planning || queueing || !!proposalMutationId || !issueText.trim() || !state.slots.length || saveStatus === "loading"}>{planning ? <><Loader2 size={15} className="spin" />確認中</> : "調整案を作る"}</button>
       </form>
       <div className="change-assist"><details className="change-examples"><summary>入力例</summary><div className="example-buttons">{["いまの進行が10分押しています", "次の登壇者が15分遅れます", "全体を10分短縮したい"].map(text => <button type="button" key={text} disabled={planning || queueing} onClick={() => { updateIssue(text); document.getElementById("issue-input")?.focus(); }}>{text}</button>)}</div></details><button type="button" className="text-button" disabled={planning || queueing || !issueText.trim() || !state.slots.length || storage !== "cloud" || saveStatus !== "saved"} onClick={() => void queueChange()}>{queueing ? <Loader2 size={14} className="spin" aria-hidden="true" /> : <Bot size={14} aria-hidden="true" />}{queueing ? "受付中" : "dotに依頼"}</button></div>
+      </section>
       {changeRequests.some(request => request.eventId === state.event.id && request.status === "pending") && <details className="agent-inbox"><summary>dotへの依頼 · 未処理{pendingChangeCount}件</summary><div>{changeRequests.filter(request => request.eventId === state.event.id && request.status === "pending").map(request => <article key={request.id}><p>{request.text}</p><small>候補待ち · {new Date(request.createdAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })}</small></article>)}<p className="field-hint">{eventDelivery?.activeSubscriptions ? `イベント購読${eventDelivery.activeSubscriptions}件 · 受信後の提案を待っています。` : "イベント購読が未設定です。dotにイベント監視の指示を送ってください。"}{eventDelivery?.pendingDeliveries ? ` 未通知${eventDelivery.pendingDeliveries}件。` : ""}</p></div></details>}
       {agentProposals.some(proposal => proposal.eventId === state.event.id) && <details className="agent-inbox"><summary>エージェントからの提案 · {agentProposals.filter(proposal => proposal.eventId === state.event.id).length}件</summary><div>{agentProposals.filter(proposal => proposal.eventId === state.event.id).map(proposal => {
         const stale = proposal.baseRevision !== state.revision;
@@ -544,10 +563,12 @@ export default function Home() {
         <div className="table-toolbar"><span className="table-count">タイムテーブル · {state.slots.length}枠</span><div className="table-tools" role="group" aria-label="タイムテーブルの操作">
           <button type="button" className="button secondary small" disabled={saveStatus === "loading"} onClick={() => setSlotEditor("new")}><Plus size={15} aria-hidden="true" />枠を追加</button>
           <details className="export-menu" ref={exportMenuRef}>
-            <summary className="button secondary small" aria-label="書き出し"><Download size={15} aria-hidden="true" /><span>書き出し</span><ChevronDown size={12} aria-hidden="true" /></summary>
+            <summary className="button secondary small" aria-label="書き出し" aria-busy={!!exporting}>{exporting ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <Download size={15} aria-hidden="true" />}<span>{exporting ? "書き出し中" : "書き出し"}</span><ChevronDown size={12} aria-hidden="true" /></summary>
             <div className="export-popover">
-              <button type="button" disabled={saveStatus === "loading"} onClick={() => menuAction(() => exportFile("csv"))}><FileSpreadsheet size={15} aria-hidden="true" />CSVを書き出す</button>
-              <button type="button" disabled={saveStatus === "loading"} onClick={() => menuAction(() => exportFile("json"))}><FileJson size={15} aria-hidden="true" />バックアップ（JSON）</button>
+              <button type="button" disabled={saveStatus === "loading" || !!exporting} onClick={() => menuAction(() => void exportDocument("pdf"))}><FileText size={15} aria-hidden="true" />PDFを書き出す</button>
+              <button type="button" disabled={saveStatus === "loading" || !!exporting} onClick={() => menuAction(() => void exportDocument("xlsx"))}><FileSpreadsheet size={15} aria-hidden="true" />Excel（.xlsx）を書き出す</button>
+              <button type="button" disabled={saveStatus === "loading" || !!exporting} onClick={() => menuAction(() => exportFile("csv"))}><FileSpreadsheet size={15} aria-hidden="true" />CSVを書き出す</button>
+              <button type="button" disabled={saveStatus === "loading" || !!exporting} onClick={() => menuAction(() => exportFile("json"))}><FileJson size={15} aria-hidden="true" />バックアップ（JSON）</button>
             </div>
           </details>
           <label className="table-filter"><span className="visually-hidden">表示する進行枠</span><select value={filter} onChange={event => setFilter(event.target.value)}><option value="all">すべて</option><option value="remaining">未完了</option><option value="done">終了済み</option></select></label>
