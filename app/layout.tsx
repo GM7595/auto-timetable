@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { THEME_INIT_SCRIPT } from "@/lib/theme";
 import "./globals.css";
+import "@/components/role-emoji-picker.css";
 
 export const metadata: Metadata = {
   title: "タイテ作成ツール",

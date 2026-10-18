@@ -1,18 +1,23 @@
 "use client";
 
-import { Fragment, useId, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Plus, Trash2, UserRound, X } from "lucide-react";
+import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { GripVertical, Plus, Trash2, UserRound, X } from "lucide-react";
 import type { SlotMember } from "@/lib/types";
 import { getMemberRole, isMemberRoleIcon, MAX_MEMBERS, MAX_MEMBER_NAME_LENGTH, MAX_MEMBER_ROLE_LENGTH, MAX_MEMBER_ROLES, MEMBER_ROLE_PRESETS } from "@/lib/member-roles";
+import { RoleEmojiPicker } from "@/components/role-emoji-picker";
 
-const ROLE_EMOJI_OPTIONS = [
-  ["🏷️", "タグ"], ["👑", "リーダー"], ["🎤", "マイク"], ["🎙️", "司会"], ["🎸", "ギター"], ["🎹", "キーボード"],
-  ["🥁", "ドラム"], ["🎺", "トランペット"], ["🎷", "サックス"], ["🎻", "バイオリン"], ["🪕", "バンジョー"], ["🪈", "フルート"],
-  ["🪇", "マラカス"], ["🎼", "楽譜"], ["🎵", "音符"], ["🎧", "ヘッドホン"], ["🎛️", "音響"], ["💡", "照明"],
-  ["🎬", "映像"], ["📷", "写真"], ["🎥", "撮影"], ["🖌️", "デザイン"], ["💻", "パソコン"], ["📋", "進行"],
-  ["📣", "広報"], ["💼", "運営"], ["🛠️", "技術"], ["🧑‍💼", "担当者"], ["🤝", "調整"], ["🛡️", "安全"],
-  ["💰", "会計"], ["🎫", "受付"], ["🍽️", "飲食"], ["🧹", "清掃"], ["⭐", "星"], ["❤️", "ハート"],
-] as const;
+type MemberDrag = {
+  source: number;
+  target: number;
+  active: boolean;
+  kind: "pointer" | "keyboard";
+  pointerId?: number;
+  startX: number;
+  startY: number;
+  handle: HTMLButtonElement;
+  members: SlotMember[];
+  rolesOptional: boolean;
+};
 
 export function MemberEditor({ members, onChange, rolesOptional, onRolesOptionalChange }: { members: SlotMember[]; onChange: (members: SlotMember[]) => void; rolesOptional: boolean; onRolesOptionalChange: (optional: boolean) => void }) {
   const id = useId();
@@ -23,9 +28,25 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
   const [manualEmoji, setManualEmoji] = useState("");
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const emojiTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
+  const handleRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const tableFrameRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<MemberDrag | null>(null);
+  const pendingFocusRef = useRef<number | null>(null);
+  const [drag, setDrag] = useState<MemberDrag | null>(null);
+  const [dragAnnouncement, setDragAnnouncement] = useState("");
   const canAddMember = members.length < MAX_MEMBERS;
   const incompleteIndex = members.findIndex(member => member.name.trim().length === 0 || (!rolesOptional && member.roles.length === 0));
   const incompleteMessage = incompleteIndex < 0 ? "" : members[incompleteIndex].name.trim().length === 0 ? `保存するには${incompleteIndex + 1}人目の名前を入力してください。` : `保存するには${incompleteIndex + 1}人目の楽器・役職を選んでください（不要なら「役職なし」をオン）。`;
+
+  useEffect(() => {
+    if (dragRef.current && (dragRef.current.members !== members || dragRef.current.rolesOptional !== rolesOptional)) cancelDrag();
+    if (pendingFocusRef.current !== null) {
+      handleRefs.current[pendingFocusRef.current]?.focus({ preventScroll: true });
+      pendingFocusRef.current = null;
+    }
+  }, [members, rolesOptional]);
+  useEffect(() => () => { releaseDrag(); }, []);
 
   function newMember(): SlotMember {
     return rolesOptional ? { name: "", roles: [], roleNotRequired: true } : { name: "", roles: [] };
@@ -40,6 +61,7 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
   }
 
   function changeMember(index: number, change: Partial<SlotMember>) {
+    cancelDrag();
     onChange(members.map((member, memberIndex) => copyMember(member, memberIndex === index ? change : {})));
   }
 
@@ -51,13 +73,114 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
     setManualEmoji("");
   }
 
-  function moveMember(index: number, direction: -1 | 1) {
-    const target = index + direction;
-    if (index < 0 || index >= members.length || target < 0 || target >= members.length) return;
+  function releaseDrag() {
+    const current = dragRef.current;
+    dragRef.current = null;
+    if (current?.kind === "pointer" && current.pointerId !== undefined && current.handle.hasPointerCapture(current.pointerId)) current.handle.releasePointerCapture(current.pointerId);
+    return current;
+  }
+
+  function cancelDrag(restoreFocus = false) {
+    const current = releaseDrag();
+    if (!current) return;
+    setDrag(null);
+    setDragAnnouncement("並び替えをキャンセルしました。");
+    if (restoreFocus) current.handle.focus({ preventScroll: true });
+  }
+
+  function dragName(current: MemberDrag) {
+    return current.members[current.source]?.name.trim() || `メンバー${current.source + 1}`;
+  }
+
+  function updateDrag(current: MemberDrag, target: number) {
+    const next = { ...current, active: true, target };
+    dragRef.current = next;
+    setDrag(next);
+    if (!current.active || current.target !== target) setDragAnnouncement(`${dragName(current)}の移動先は${target + 1}番目です。離すか Enter キーで確定、Escape キーでキャンセルします。`);
+  }
+
+  function moveMember(current: MemberDrag, target: number) {
+    if (current.members !== members || current.rolesOptional !== rolesOptional || current.source < 0 || current.source >= members.length || target < 0 || target >= members.length || target === current.source) return;
     const reordered = members.map(member => copyMember(member));
-    [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+    const [moved] = reordered.splice(current.source, 1);
+    reordered.splice(target, 0, moved);
     resetPickers();
+    pendingFocusRef.current = target;
+    setDragAnnouncement(`${dragName(current)}を${target + 1}番目に移動しました。`);
     onChange(reordered);
+  }
+
+  // Main-row midpoints exclude both the dragged member and any expanded palette rows.
+  function pointerTarget(current: MemberDrag, clientY: number) {
+    let target = 0;
+    for (let index = 0; index < members.length; index++) {
+      if (index === current.source) continue;
+      const rect = rowRefs.current[index]?.getBoundingClientRect();
+      if (rect && clientY >= rect.top + rect.height / 2) target++;
+    }
+    return Math.min(members.length - 1, target);
+  }
+
+  function startPointerDrag(event: PointerEvent<HTMLButtonElement>, index: number) {
+    if (members.length < 2 || index < 0 || index >= members.length || event.button !== 0 || !event.isPrimary) return;
+    cancelDrag();
+    const current: MemberDrag = { source: index, target: index, active: false, kind: "pointer", pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, handle: event.currentTarget, members, rolesOptional };
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.focus({ preventScroll: true });
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = current;
+    setDrag(current);
+  }
+
+  function movePointerDrag(event: PointerEvent<HTMLButtonElement>) {
+    const current = dragRef.current;
+    if (!current || current.kind !== "pointer" || current.pointerId !== event.pointerId) return;
+    if (current.members !== members || current.rolesOptional !== rolesOptional) { cancelDrag(); return; }
+    if (!current.active && Math.hypot(event.clientX - current.startX, event.clientY - current.startY) < 5) return;
+    event.preventDefault();
+    if (!current.active) resetPickers();
+    updateDrag(current, pointerTarget(current, event.clientY));
+  }
+
+  function endPointerDrag(event: PointerEvent<HTMLButtonElement>) {
+    const current = dragRef.current;
+    if (!current || current.kind !== "pointer" || current.pointerId !== event.pointerId) return;
+    const frame = tableFrameRef.current;
+    const rect = frame?.getBoundingClientRect();
+    const inside = rect && event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
+    const hit = frame?.ownerDocument.elementFromPoint(event.clientX, event.clientY);
+    if (!current.active || !inside || !hit || !frame?.contains(hit)) { cancelDrag(); return; }
+    event.preventDefault();
+    const target = pointerTarget(current, event.clientY);
+    releaseDrag();
+    setDrag(null);
+    moveMember(current, target);
+  }
+
+  function keyDrag(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    const current = dragRef.current;
+    if (event.key === "Escape" && current) {
+      event.preventDefault(); event.stopPropagation(); cancelDrag(true); return;
+    }
+    if (event.key === " " || event.key === "Enter") {
+      event.preventDefault(); event.stopPropagation();
+      if (event.repeat || members.length < 2) return;
+      if (current?.kind === "keyboard" && current.source === index) {
+        releaseDrag(); setDrag(null); moveMember(current, current.target);
+      } else {
+        cancelDrag(); resetPickers();
+        const next: MemberDrag = { source: index, target: index, active: true, kind: "keyboard", startX: 0, startY: 0, handle: event.currentTarget, members, rolesOptional };
+        dragRef.current = next;
+        setDrag(next);
+        setDragAnnouncement(`${dragName(next)}をつかみました。上下矢印キーで移動先を選び、Enter キーで確定します。`);
+      }
+      return;
+    }
+    if (!current || current.kind !== "keyboard" || current.source !== index || !["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    event.preventDefault(); event.stopPropagation();
+    const target = event.key === "Home" ? 0 : event.key === "End" ? members.length - 1 : Math.max(0, Math.min(members.length - 1, current.target + (event.key === "ArrowUp" ? -1 : 1)));
+    updateDrag(current, target);
   }
 
   function toggleRole(index: number, role: string) {
@@ -132,7 +255,8 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
 
   return <fieldset className="member-editor" onKeyDown={event => {
     if (event.key !== "Escape") return;
-    if (emojiTarget !== null) { event.preventDefault(); event.stopPropagation(); closeEmojiPicker(); }
+    if (dragRef.current) { event.preventDefault(); event.stopPropagation(); cancelDrag(true); }
+    else if (emojiTarget !== null) { event.preventDefault(); event.stopPropagation(); closeEmojiPicker(); }
     else if (openIndex !== null) { event.preventDefault(); event.stopPropagation(); closePicker(); }
   }}>
     <legend>メンバー</legend>
@@ -140,20 +264,24 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
       <p className="member-editor-hint">{rolesOptional ? "保存には全メンバーの名前が必要です。" : "保存には全メンバーの名前と楽器・役職が必要です。"}</p>
       <label className="member-role-optional" htmlFor={`${id}-no-roles`}>
         <input id={`${id}-no-roles`} type="checkbox" role="switch" aria-label="全メンバーの役職なし" checked={rolesOptional} onChange={event => {
+          cancelDrag();
           resetPickers();
           onRolesOptionalChange(event.target.checked);
         }} />
         <span>役職なし</span>
       </label>
     </div>
-    {members.length > 0 && <div className="member-editor-table-frame">
+    <p className="visually-hidden" id={`${id}-drag-instructions`}>ドラッグして並び替えます。キーボードでは Space または Enter キーでつかみ、上下矢印キーで移動、Space または Enter キーで確定、Escape キーでキャンセルします。</p>
+    <span className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">{dragAnnouncement}</span>
+    {members.length > 0 && <div className="member-editor-table-frame" ref={tableFrameRef}>
       <table className={`member-editor-table${rolesOptional ? " member-editor-table-no-roles" : ""}`}>
         <caption className="visually-hidden">メンバーと楽器・役職</caption>
         <colgroup><col className="member-editor-name-column" />{!rolesOptional && <col />}<col className="member-editor-action-column" /></colgroup>
         <thead><tr><th scope="col">名前</th>{!rolesOptional && <th scope="col">楽器・役職</th>}<th scope="col"><span className="visually-hidden">操作</span></th></tr></thead>
         <tbody>{members.map((member, index) => <Fragment key={index}>
-        <tr className="member-editor-row">
+        <tr ref={node => { rowRefs.current[index] = node; }} className={`member-editor-row${drag?.active && drag.source === index ? " member-editor-row-dragging" : ""}`} data-drop-position={drag?.active && drag.target !== drag.source && drag.target === index ? drag.target < drag.source ? "before" : "after" : undefined}>
           <td><div className="member-editor-name-row">
+          <button ref={node => { handleRefs.current[index] = node; }} className="icon-button member-editor-drag-handle" type="button" aria-label={`メンバー${index + 1}をドラッグして並び替え`} title="ドラッグして並び替え" aria-describedby={`${id}-drag-instructions`} aria-pressed={drag?.active && drag.source === index || false} disabled={members.length < 2} onPointerDown={event => startPointerDrag(event, index)} onPointerMove={movePointerDrag} onPointerUp={endPointerDrag} onPointerCancel={event => { if (dragRef.current?.pointerId === event.pointerId) cancelDrag(); }} onLostPointerCapture={event => { if (dragRef.current?.pointerId === event.pointerId) cancelDrag(); }} onBlur={() => { if (dragRef.current?.kind === "keyboard") cancelDrag(); }} onKeyDown={event => keyDrag(event, index)}><GripVertical size={15} aria-hidden="true" /></button>
           <UserRound size={15} aria-hidden="true" />
           <label className="visually-hidden" htmlFor={`${id}-name-${index}`}>メンバー{index + 1}の名前</label>
           <input id={`${id}-name-${index}`} aria-label={`メンバー${index + 1}の名前`} value={member.name} maxLength={MAX_MEMBER_NAME_LENGTH} placeholder="名前" onChange={event => changeMember(index, { name: event.target.value })} />
@@ -178,11 +306,8 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
           }}><Plus size={13} aria-hidden="true" />楽器・役職</button>
           </div></td>}
           <td className="member-editor-action-cell"><div className="member-editor-actions">
-          <div className="member-editor-reorder">
-            <button className="icon-button member-editor-move" type="button" aria-label={`メンバー${index + 1}を上へ`} title="上へ移動" disabled={index === 0} onClick={() => moveMember(index, -1)}><ArrowUp size={13} aria-hidden="true" /></button>
-            <button className="icon-button member-editor-move" type="button" aria-label={`メンバー${index + 1}を下へ`} title="下へ移動" disabled={index === members.length - 1} onClick={() => moveMember(index, 1)}><ArrowDown size={13} aria-hidden="true" /></button>
-          </div>
           <button className="icon-button member-editor-remove" type="button" aria-label={`メンバー${index + 1}を削除`} title="メンバーを削除" onClick={() => {
+            cancelDrag();
             onChange(members.filter((_, memberIndex) => memberIndex !== index).map(remaining => copyMember(remaining)));
             setEmojiTarget(null);
             setManualEmoji("");
@@ -210,9 +335,7 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
           </div></>}
           {emojiTarget?.index === index && <div className="member-role-emoji-picker" id={`${id}-emoji-${index}`} role="group" aria-label={emojiTarget.role === null ? "カスタム役職の絵文字" : `${emojiTarget.role}の絵文字`}>
             <p className="member-role-emoji-heading">{emojiTarget.role === null ? "絵文字を選択" : `${emojiTarget.role}の絵文字`}</p>
-            <div className="member-role-emoji-options">
-              {ROLE_EMOJI_OPTIONS.map(([icon, name]) => <button type="button" className="member-role-emoji-option" key={icon} aria-label={`${name}の絵文字`} title={name} aria-pressed={(emojiTarget.role === null ? customEmoji : getMemberRole(emojiTarget.role, member.roleIcons).icon) === icon} onClick={() => chooseEmoji(icon)}><span aria-hidden="true">{icon}</span></button>)}
-            </div>
+            <RoleEmojiPicker selected={emojiTarget.role === null ? customEmoji : getMemberRole(emojiTarget.role, member.roleIcons).icon} onSelect={chooseEmoji} />
             <div className="member-role-emoji-manual">
               <label className="visually-hidden" htmlFor={`${id}-manual-emoji-${index}`}>その他の絵文字</label>
               <input id={`${id}-manual-emoji-${index}`} aria-label="その他の絵文字" value={manualEmoji} maxLength={32} placeholder="その他の絵文字を入力" aria-invalid={manualEmoji.length > 0 && !isMemberRoleIcon(manualEmoji.trim())} onChange={event => setManualEmoji(event.target.value)} onKeyDown={event => {
@@ -233,6 +356,7 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
     </div>}
     <button className="text-button member-editor-add" type="button" disabled={!canAddMember} title={!canAddMember ? `メンバーは${MAX_MEMBERS}人までです。` : undefined} onClick={() => {
       if (!canAddMember) return;
+      cancelDrag();
       onChange([...members.map(member => copyMember(member)), newMember()]);
     }}><Plus size={14} aria-hidden="true" />メンバーを追加</button>
     {incompleteIndex >= 0 && <p className="member-role-limit" id={`${id}-incomplete`} aria-live="polite">{incompleteMessage}</p>}

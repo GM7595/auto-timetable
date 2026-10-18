@@ -1,0 +1,45 @@
+/* Use local Unicode glyphs and the app's explicit theme, including cream light mode. */
+.role-emoji-picker { width:100%; min-width:0; }
+.role-emoji-picker-panel {
+  --epr-font-family:inherit;
+  --epr-bg-color:var(--surface);
+  --epr-text-color:var(--foreground);
+  --epr-picker-border-color:var(--control-border);
+  --epr-picker-border-radius:5px;
+  --epr-highlight-color:var(--primary);
+  --epr-hover-bg-color:var(--surface-hover);
+  --epr-focus-bg-color:var(--surface-selected);
+  --epr-search-input-bg-color:var(--surface-subtle);
+  --epr-search-input-bg-color-active:var(--surface);
+  --epr-search-input-text-color:var(--foreground);
+  --epr-search-input-placeholder-color:var(--secondary);
+  --epr-search-border-color:var(--control-border);
+  --epr-search-border-color-active:var(--focus);
+  --epr-search-icon-color:var(--secondary);
+  --epr-category-label-bg-color:var(--surface);
+  --epr-category-label-text-color:var(--secondary);
+  --epr-category-icon-active-color:var(--primary);
+  --epr-category-icon-inactive-color:var(--secondary);
+  --epr-skin-tone-picker-menu-color:var(--surface);
+  --epr-preview-text-color:var(--secondary);
+  --epr-dark-bg-color:var(--surface);
+  --epr-dark-picker-border-color:var(--control-border);
+  --epr-dark-text-color:var(--foreground);
+  --epr-dark-search-input-bg-color:var(--surface-subtle);
+  --epr-dark-hover-bg-color:var(--surface-hover);
+  --epr-emoji-size:27px;
+  --epr-emoji-padding:5px;
+  --epr-category-navigation-button-size:28px;
+  --epr-horizontal-padding:8px;
+  --epr-preview-height:52px;
+  --epr-preview-emoji-size:30px;
+  width:100%;
+  min-width:0;
+  max-width:100%;
+  color-scheme:inherit;
+}
+.role-emoji-picker-panel [role="tablist"] { justify-content:flex-start; gap:3px; min-width:0; overflow-x:auto; scrollbar-width:thin; }
+.role-emoji-picker-panel :is(button,input):focus-visible { outline:2px solid var(--focus); outline-offset:-2px; }
+@media (max-width:600px) {
+  .role-emoji-picker-panel [data-epr-part="search-input"] { font-size:16px; }
+}
