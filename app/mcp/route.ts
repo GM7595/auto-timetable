@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { proposePlans } from "@/lib/decisions";
 import { getAgentContext, publishAgentProposal } from "@/lib/agent-proposals";
+import { listPendingChangeRequests } from "@/lib/change-requests";
+import { listMcpEvents, McpEventError, subscribeMcpEvent, unsubscribeMcpEvent } from "@/lib/mcp-events";
 import { computeSchedule } from "@/lib/planner";
 import { createProposalReviewUrl } from "@/lib/proposal-review-link";
 import { checkBrowserOrigin, getEventState, getPrivateCallerContext, HttpError, jsonResponse, readJsonBody } from "@/lib/server-store";
@@ -61,8 +63,8 @@ function rpcResult(id: string | number | null, result: unknown) {
   return jsonResponse({ jsonrpc: "2.0", id, result });
 }
 
-function rpcError(id: string | number | null, code: number, message: string) {
-  return jsonResponse({ jsonrpc: "2.0", id, error: { code, message } });
+function rpcError(id: string | number | null, code: number, message: string, data?: unknown) {
+  return jsonResponse({ jsonrpc: "2.0", id, error: { code, message, ...(data ? { data } : {}) } });
 }
 
 function content(value: unknown, isError = false) {
@@ -73,7 +75,7 @@ async function runTool(name: string, args: unknown, origin: string) {
   if (name === "get_event") {
     emptyArguments.parse(args ?? {});
     const state = await getEventState();
-    return { state, schedule: computeSchedule(state), storage: "cloud" };
+    return { state, schedule: computeSchedule(state), storage: "cloud", pendingChangeRequests: await listPendingChangeRequests(state.event.id) };
   }
   if (name === "list_open_issues") {
     emptyArguments.parse(args ?? {});
@@ -108,7 +110,20 @@ export async function POST(request: Request) {
     const rpc = await readJsonBody(request, rpcSchema, 32 * 1024);
     id = rpc.id ?? null;
     if (rpc.id === undefined) return new Response(null, { status: 202, headers: { "Cache-Control": "no-store" } });
-    if (rpc.method === "server/discover") return rpcResult(id, { supportedVersions: ["2026-07-28"], capabilities: { tools: {} }, serverInfo: { name: "cue", version: "1.0.0" } });
+    if (rpc.method === "server/discover") return rpcResult(id, { resultType: "complete", supportedVersions: ["2026-07-28"], capabilities: { tools: {}, events: {} }, serverInfo: { name: "cue", version: "1.0.0" } });
+    if (rpc.method.startsWith("events/")) {
+      try {
+        if (rpc.method === "events/list") return rpcResult(id, await listMcpEvents(rpc.params));
+        const principal = request.headers.get("oai-authenticated-user-id");
+        if (rpc.method === "events/subscribe") return rpcResult(id, await subscribeMcpEvent(principal, rpc.params));
+        if (rpc.method === "events/unsubscribe") return rpcResult(id, await unsubscribeMcpEvent(principal, rpc.params));
+        return rpcError(id, -32601, "Method not found");
+      } catch (error) {
+        if (error instanceof McpEventError) return rpcError(id, error.rpcCode, error.message, error.reason ? { reason: error.reason } : undefined);
+        if (error instanceof z.ZodError) return rpcError(id, -32602, "イベント購読の入力内容を確認してください。");
+        return rpcError(id, -32603, "イベント購読を処理できませんでした。");
+      }
+    }
     if (rpc.method === "tools/list") return rpcResult(id, { tools: toolDefinitions });
     if (rpc.method !== "tools/call") return rpcError(id, -32601, "Method not found");
     const params = toolCallSchema.safeParse(rpc.params);

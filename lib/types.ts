@@ -84,4 +84,14 @@ export interface Plan {
   changes: string[];
   tradeoffs: string[];
   score: number;
+  /** Net finish-time goal. Absent when shortening one specific slot. */
+  shortening?: {
+    originalEnd: number;
+    targetEnd: number;
+    requestedMinutes: number;
+    achievedMinutes: number;
+    shortfallMinutes: number;
+    contentReductionMinutes: number;
+    met: boolean;
+  };
 }
