@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowDownToLine, ArrowUpRight, Bot, CalendarDays, CalendarPlus, Check, CheckCircle2, ChevronDown, Clock3, Download, FileJson, FileSpreadsheet, History, Loader2, LockKeyhole, Pencil, Plug2, Plus, RotateCcw, Settings2, Trash2, X } from "lucide-react";
+import { ArrowDownToLine, ArrowUpRight, Bot, CalendarDays, CalendarPlus, Check, CheckCircle2, ChevronDown, Clock3, Download, FileJson, FileSpreadsheet, History, Loader2, LockKeyhole, MapPin, Pencil, Plug2, Plus, RotateCcw, Settings2, Trash2, X } from "lucide-react";
 import { demoState, createEmptyState } from "@/lib/demo";
 import { computeSchedule, formatTime, generatePlans, parseIssue, parseTime } from "@/lib/planner";
 import type { EventState, EventSlot, Plan, HistoryEntry } from "@/lib/types";
@@ -475,7 +475,7 @@ export default function Home() {
     </header>
     <main className="minimal-workspace">
       <div className="event-heading">
-        <div className="event-identity"><div className="event-title-row"><h1>{state.event.name}</h1><button type="button" className="icon-button event-edit" aria-label="イベント設定" title="イベント設定を編集" disabled={saveStatus === "loading"} onClick={() => setSettingsOpen(true)}><Pencil size={16} aria-hidden="true" /></button></div><p className="event-details">{dateLabel(state.event.date)} · {formatTime(state.event.startTime)}–{formatTime(state.event.endTime)}{state.event.location && " · " + state.event.location}</p></div>
+        <div className="event-identity"><div className="event-title-row"><h1>{state.event.name}</h1><button type="button" className="icon-button event-edit" aria-label="イベント設定" title="イベント設定を編集" disabled={saveStatus === "loading"} onClick={() => setSettingsOpen(true)}><Pencil size={16} aria-hidden="true" /></button></div><p className="event-details"><span title="開催日"><CalendarDays size={14} aria-hidden="true" /><time dateTime={state.event.date}>{dateLabel(state.event.date)}</time></span><span title="開催時間"><Clock3 size={14} aria-hidden="true" /><span>{formatTime(state.event.startTime)}–{formatTime(state.event.endTime)}</span></span>{state.event.location && <span className="event-location" title="会場"><MapPin size={14} aria-hidden="true" /><span>{state.event.location}</span></span>}</p></div>
         <div className="event-actions"><span className={"save-status" + (saveStatus === "error" ? " error" : "")} role="status">{saveStatus === "loading" || saveStatus === "saving" ? <Loader2 size={13} className="spin" aria-hidden="true" /> : saveStatus === "saved" ? <CheckCircle2 size={13} aria-hidden="true" /> : null}{saveStatus === "loading" ? "読み込み中" : saveStatus === "saving" ? "保存中" : saveStatus === "saved" ? "保存済み" : saveStatus === "error" ? "クラウド未保存" : "端末に保存"}</span><button type="button" className="text-button" disabled={saveStatus === "loading"} onClick={() => setPanel("history")}><History size={15} aria-hidden="true" />変更履歴</button></div>
       </div>
       {timing && <p className={"event-clock event-clock-" + timing.phase} title="日本時間の現在時刻とタイムテーブルから自動表示します。実際の遅れは変更欄から反映してください。"><Clock3 size={13} aria-hidden="true" /><span>{timing.phase === "active" ? `進行中 · ${timing.label}` : timing.label}</span><small>予定時刻から自動表示 · 日本時間</small></p>}

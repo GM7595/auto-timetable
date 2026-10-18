@@ -103,8 +103,11 @@ input,select,textarea { min-width:0; }
 .event-heading h1 { color:var(--foreground); font-size:23px; font-weight:650; letter-spacing:-.025em; line-height:1.45; overflow-wrap:anywhere; }
 .event-title-row h1 { min-width:0; }
 .event-edit { width:28px; height:28px; }
-.event-details { margin-top:5px; color:var(--secondary); font-size:12px; overflow-wrap:anywhere; }
-.event-details>span { display:inline-flex; align-items:center; gap:5px; }
+.event-details { display:flex; flex-wrap:wrap; gap:5px 15px; margin-top:5px; color:var(--secondary); font-size:12px; overflow-wrap:anywhere; }
+.event-details>span { display:inline-flex; align-items:flex-start; gap:5px; min-width:0; }
+.event-details>span>svg { flex-shrink:0; margin-top:3px; }
+.event-details time,.event-details>span:not(.event-location)>span { white-space:nowrap; }
+.event-location>span { min-width:0; overflow-wrap:anywhere; }
 .event-actions { display:flex; align-items:center; gap:15px; flex-shrink:0; }
 .button { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:35px; padding:7px 11px; color:var(--button-text); background:var(--surface); border:1px solid var(--control-border); border-radius:4px; font-size:13px; font-weight:500; line-height:1.5; white-space:nowrap; }
 .button:hover { color:var(--foreground); background:var(--surface-subtle); border-color:var(--control-hover-border); }
