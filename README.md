@@ -50,6 +50,7 @@ D1の `cue_event_state` テーブルに、イベント全体をJSONとして1件
 | `POST /api/plans` | 入力 `{ state, text }`。`{ plans, issue, engine, aiStatus, elapsedMs, notice?, decisions? }` を返す |
 | `POST /api/decisions/check` | 合成データで実APIに接続し、`{ configured, aiStatus, decisions?, notice? }` を返す。イベント情報は送信しない |
 | `GET /api/agent` | 現在のイベントへのエージェント提案を直近5件取得する。進行表は変更しない |
+| `POST /api/agent` | 認可されたクラウドサービス向け。MCPと同じ `{ text, expectedRevision, requestId }` で提案だけを保存する |
 | `GET /api/status` | Decisionsの設定有無、MCPの提供状態を返す。dots本体の稼働は観測できないため `dotsConnected: null` |
 
 保存時は `state.revision` と `expectedRevision` に同じ、読み込み済みのバージョン番号を指定します。サーバーが原子的に比較し、成功時に1増やします。競合時は `409` と最新の `state` を返し、後から来た変更で上書きしません。
