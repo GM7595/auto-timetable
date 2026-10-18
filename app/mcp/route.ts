@@ -2,6 +2,7 @@ import { z } from "zod";
 import { proposePlans } from "@/lib/decisions";
 import { getAgentContext, publishAgentProposal } from "@/lib/agent-proposals";
 import { computeSchedule } from "@/lib/planner";
+import { createProposalReviewUrl } from "@/lib/proposal-review-link";
 import { checkBrowserOrigin, getEventState, getPrivateCallerContext, HttpError, jsonResponse, readJsonBody } from "@/lib/server-store";
 
 const toolDefinitions = [
@@ -68,7 +69,7 @@ function content(value: unknown, isError = false) {
   return { content: [{ type: "text", text: JSON.stringify(value) }], isError };
 }
 
-async function runTool(name: string, args: unknown) {
+async function runTool(name: string, args: unknown, origin: string) {
   if (name === "get_event") {
     emptyArguments.parse(args ?? {});
     const state = await getEventState();
@@ -83,7 +84,13 @@ async function runTool(name: string, args: unknown) {
   if (name === "propose_change") {
     const parsed = changeArguments.parse(args);
     const state = await getEventState();
-    return { ...await proposePlans(state, parsed.text), revision: state.revision, applied: false };
+    return {
+      ...await proposePlans(state, parsed.text),
+      revision: state.revision,
+      applied: false,
+      reviewUrl: createProposalReviewUrl(origin, { eventId: state.event.id, revision: state.revision, text: parsed.text }),
+      reviewNotice: "このリンクは保存済み提案ではなく、開いた時点の最新条件で変更案を再比較するためのものです。進行表への反映には主催者の承認が必要です。",
+    };
   }
   if (name === "get_agent_context") {
     emptyArguments.parse(args ?? {});
@@ -107,7 +114,7 @@ export async function POST(request: Request) {
     const params = toolCallSchema.safeParse(rpc.params);
     if (!params.success) return rpcError(id, -32602, "Invalid tool parameters");
     try {
-      return rpcResult(id, content(await runTool(params.data.name, params.data.arguments)));
+      return rpcResult(id, content(await runTool(params.data.name, params.data.arguments, new URL(request.url).origin)));
     } catch (error) {
       const message = error instanceof HttpError ? error.message : error instanceof z.ZodError ? "ツールの入力内容を確認してください。" : "ツールを実行できませんでした。少し待って再度お試しください。";
       return rpcResult(id, content({ error: message, ...(error instanceof HttpError ? { code: error.code } : {}) }, true));

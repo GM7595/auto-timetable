@@ -34,7 +34,7 @@ npm run build
 npm run lint
 npx tsc --noEmit
 node --experimental-strip-types --test lib/planner.test.ts
-node --test lib/decisions.test.mjs lib/agent-proposals.test.mjs lib/dots-instructions.test.mjs lib/page.test.mjs lib/timetable.test.mjs lib/theme.test.mjs
+node --test lib/decisions.test.mjs lib/agent-proposals.test.mjs lib/dots-instructions.test.mjs lib/proposal-review-link.test.mjs lib/page.test.mjs lib/timetable.test.mjs lib/theme.test.mjs
 ```
 
 Sitesプラグインを使う場合は、そのインストール・プレビュー・ビルド・公開の手順に従ってください。
@@ -85,18 +85,20 @@ JSONの大きさ・枠数・文字数・時刻・IDの重複などをサーバ�
 
 - `get_event`：保存済みイベントと進行表を取得。
 - `list_open_issues`：現在の制約違反・注意点を取得。
-- `propose_change`：保存済みイベントへの変更案を取得。`applied: false` と元のバージョンを返し、イベントは変更しません。
+- `propose_change`：保存済みイベントへの変更案を取得。`applied: false` と元のバージョン、サイトで再比較する `reviewUrl` を返します。イベントや提案は保存しません。既存の入力形式・読み取り専用の権限は変更していません。
 - `get_agent_context`：最新のイベント・revision・変更履歴・保存済み提案・操作範囲を取得。
 - `publish_change_proposal`：`{ text, expectedRevision, requestId }` を受け取り、コードで検証・Decisionsで比較した候補を提案として保存。進行表には適用しない。
 
 `publish_change_proposal` の提案はD1の `cue_agent_proposal` に保存されます。作成前・作成後・書き込み時に進行表のrevisionとイベントIDを検査します。同一イベントの同じrequestId・内容・revisionは再試行しても同じ提案を返し、内容の異なる再利用は409にします。上限はイベントごとに100件で、自動削除しません。画面には直近5件が表示され、15秒ごとと画面に戻った時に取得します。古いrevisionへの提案は反映できません。
 
+既存の3ツールしか見えないエージェントも、`get_event`・`list_open_issues`・`propose_change` で利用できます。`reviewUrl` はイベントID・revision・依頼テキストをURLフラグメントに持ちます。APIキー・認証トークン・候補そのものは含みません。依頼内容を含むリンクなので第三者への共有は避けてください。サイトのクラウド読み込みが完了し、イベントとrevisionが一致する場合に限り、既存の `/api/plans` で新しく比較します。会話内で得られた案の復元ではなく、順位や候補は変わる可能性があります。処理済みフラグメントはURLから除去し、同じ画面で二重に実行しません。古いrevisionは入力内容を表示するだけで自動比較せず、別イベントや不正なリンクではAPIを呼びません。リンクを開いてもイベントや提案は保存せず、主催者が「反映」を押すまで進行表は変わりません。
+
 ### dots側の初回設定
 
 1. サイトの「表示・連携設定」→「連携・保存」→「dotsへの指示をコピー」。
 2. 自分のdotの会話に貼り付ける。Sitesが用意したこのサイトのプラグインを使用する。ツールが見つからない場合はそのプラグインを接続する。
-3. dotが `get_agent_context` で現在のイベントを確認する。以後、主催者から変更連絡を受けたら、内容を整理して `publish_change_proposal` でサイトに提案を保存する。
-4. サイト上の「エージェントからの提案」から候補を比較し、主催者が反映する。
+3. dotが `get_event` と `list_open_issues` で現在のイベントを確認する。以後、主催者から変更連絡を受けたら `propose_change` で候補を比較し、返された「サイトで再比較」リンクを案内する。
+4. 主催者がリンクを開き、サイトで新しく比較された候補を確認して反映する。追加の `publish_change_proposal` が利用可能な場合は、主催者が依頼すればサイトに提案だけを保存する運用も可能。その場合は「エージェントからの提案」から確認できる。
 
 MCPツールはdots以外のエージェントでも使えます。MCPアクセスや提案の受信だけで「dots接続済み」「自動監視中」とは表示しません。dots本体で責任を割り当てる初回操作が必要です。外部メール・フォーム監視や定期実行は、対象と頻度の指定・必要な接続なしには開始しません。進行表の自動確定や第三者への通知機能もありません。これらを設定しない限り、dotsは会話で受けた変更連絡を処理する運用です。
 

@@ -8,6 +8,7 @@ import type { EventState, EventSlot, Plan, HistoryEntry } from "@/lib/types";
 import { Timetable } from "@/components/timetable";
 import { ThemeControl } from "@/components/theme-control";
 import { dotSetupInstructions } from "@/lib/dots-instructions";
+import { parseProposalReviewHash, type ProposalReviewLink } from "@/lib/proposal-review-link";
 import type { AgentProposal } from "@/lib/agent-proposals";
 import type { DecisionsConnectionResult, PlanningResult } from "@/lib/decisions";
 
@@ -112,6 +113,8 @@ export default function Home() {
   const [decisionCheck, setDecisionCheck] = useState<DecisionsConnectionResult | null>(null), [checkingDecision, setCheckingDecision] = useState(false);
   const [agentProposals, setAgentProposals] = useState<AgentProposal[]>([]), [agentLoadError, setAgentLoadError] = useState("");
   const saveQueue = useRef(Promise.resolve()), serverRevision = useRef(0), planBaseRevision = useRef<number | null>(null), toastTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handledReviewLink = useRef<string | null>(null);
+  const planRequestInFlight = useRef(false);
   const schedule = useMemo(() => computeSchedule(state), [state]), visibleSchedule = previewPlan?.schedule ?? schedule;
   const active = schedule.rows.find(x => x.status === "active");
   const errors = schedule.violations.filter(x => x.severity === "error");
@@ -178,6 +181,28 @@ export default function Home() {
     return () => { alive = false; clearInterval(interval); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
   }, [storage, state.event.id, state.revision]);
 
+  useEffect(() => {
+    if (storage !== "cloud" || saveStatus !== "saved" || planning) return;
+    const review = () => {
+      if (planRequestInFlight.current) return;
+      const hash = window.location.hash;
+      if (!hash || handledReviewLink.current === hash) return;
+      const link = parseProposalReviewHash(hash);
+      if (!link && !/^#review(?:=|&|$)/.test(hash)) return;
+      handledReviewLink.current = hash;
+      window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
+      if (!link) { setPlanError("再比較リンクが正しくありません。dotにリンクを作り直してもらってください。"); return; }
+      const current = stateRef.current;
+      if (link.eventId !== current.event.id) { setPlanError("別のイベントへの依頼です。現在のイベントでリンクを作り直してください。"); return; }
+      updateIssue(link.text);
+      setPanel(null);
+      void requestPlans(link.text, true, link);
+    };
+    review();
+    window.addEventListener("hashchange", review);
+    return () => window.removeEventListener("hashchange", review);
+  }, [storage, saveStatus, state.event.id, state.revision, planning]);
+
   async function checkDecisionConnection() {
     if (checkingDecision) return;
     setCheckingDecision(true);
@@ -220,27 +245,41 @@ export default function Home() {
     });
   }
 
-  async function requestPlans() {
-    if (!issueText.trim() || planning) return;
-    const text = issueText.trim(); setPlannedText(text);
+  async function requestPlans(textOverride?: string, fromReviewLink = false, reviewLink?: ProposalReviewLink) {
+    const text = (textOverride ?? issueText).trim();
+    if (!text || planning || planRequestInFlight.current) return;
+    planRequestInFlight.current = true;
+    setPlannedText(text);
     setPlanning(true); setPlanError(""); setPlans([]); setPreviewPlan(null); setPlanMeta(null);
-    const started = performance.now(), snapshot = stateRef.current; planBaseRevision.current = snapshot.revision;
+    const started = performance.now(); let snapshot = stateRef.current;
     try {
+      if (reviewLink) {
+        const response = await fetch("/api/event", { cache: "no-store" });
+        if (!response.ok) throw new Error("unavailable");
+        const latest = (await response.json() as { state: EventState }).state;
+        if (!latest?.event || !Array.isArray(latest.slots) || !Number.isSafeInteger(latest.revision)) throw new Error("unavailable");
+        if (stateRef.current !== snapshot) throw Object.assign(new Error("確認中に進行が変更されました。最新の条件で再作成してください。"), { userError: true });
+        if (latest.event.id !== reviewLink.eventId) throw Object.assign(new Error("別のイベントへの依頼です。現在のイベントでリンクを作り直してください。"), { userError: true });
+        if (latest.revision !== reviewLink.revision) throw Object.assign(new Error("このリンクは更新前の進行表への依頼です。進行表を再読み込みし、最新の条件でリンクを作り直してください。"), { userError: true });
+        snapshot = latest; stateRef.current = latest; setState(latest); serverRevision.current = latest.revision;
+      }
+      planBaseRevision.current = snapshot.revision;
       const response = await fetch("/api/plans", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state: snapshot, text }) });
       const result = await response.json() as PlanningResult & { error?: string };
       if (!response.ok) throw Object.assign(new Error(result.error ?? "条件を読み取れませんでした。"), { userError: response.status < 500 });
       if (stateRef.current.revision !== snapshot.revision) throw Object.assign(new Error("作成中に進行が変更されました。最新の条件で再作成してください。"), { userError: true });
-      setPlans(result.plans ?? []); setPlanMeta(result);
+      setPlans(result.plans ?? []); setPlanMeta({ ...result, notice: [fromReviewLink ? "dotからの依頼を現在の条件で再比較しました（未反映）。" : null, result.notice].filter(Boolean).join(" ") || undefined });
       if (!result.plans?.length) setPlanError("成立する調整案がありません。固定枠や出演可能時間を確認してください。");
     } catch (error) {
       if (stateRef.current.revision !== snapshot.revision) setPlanError("作成中に進行が変更されました。最新の条件で再作成してください。");
       else if (error instanceof Error && "userError" in error && error.userError) setPlanError(error.message);
+      else if (fromReviewLink) setPlanError("最新の進行表で再比較できませんでした。接続を確認し、進行表を再読み込みしてください。");
       else {
         const issue = parseIssue(text, snapshot);
         if (!issue) setPlanError("「次の登壇者が15分遅れます」のように、対象と変更する時間を入力してください。現在は遅延・出演可能時刻・時間短縮に対応しています。");
         else { const generated = generatePlans(snapshot, issue); setPlans(generated); setPlanMeta({ engine: "rules", aiStatus: "fallback", elapsedMs: Math.round(performance.now() - started), notice: "サーバーに接続できないため、端末内の制約計算を使っています。" }); if (!generated.length) setPlanError("成立する案がありません。固定枠・出演可能時間・音止め時刻を確認してください。"); }
       }
-    } finally { setPlanning(false); }
+    } finally { planRequestInFlight.current = false; setPlanning(false); }
   }
   function applyPlan(plan: Plan) {
     if (planBaseRevision.current !== stateRef.current.revision) { setPlans([]); setPreviewPlan(null); setPlanError("進行が変更されています。最新の条件で調整案を再作成してください。"); return; }
@@ -341,7 +380,7 @@ export default function Home() {
     {panel === "history" && <Dialog title="変更履歴" onClose={() => setPanel(null)}><div className="history-list">{state.history.length ? state.history.map(entry => <article key={entry.id}><h3>{entry.title}</h3><time>{new Date(entry.at).toLocaleDateString("ja-JP")} {timeLabel(entry.at)}</time><p>{entry.detail}</p></article>) : <p>まだ変更はありません。</p>}</div></Dialog>}
     {panel === "connections" && <Dialog title="連携・保存" onClose={() => setPanel(null)}><div className="connection-settings">
       <section><h3>Decisions API <span className="connection-status">{decisionCheck?.aiStatus === "used" ? "接続確認済み" : decisionCheck?.aiStatus === "fallback" ? "接続エラー" : aiConfigured ? "キー設定済み・未確認" : "未設定"}</span></h3><p>成立する候補をgpt-6-lunaで比較します。時間条件はコードで検証します。キー設定済みでも、認証や利用枠の状況によって比較に失敗することがあります。</p>{decisionCheck?.notice && <p role="status">{decisionCheck.notice}{decisionHttpStatus ? `（HTTP ${decisionHttpStatus}）` : ""}</p>}<button type="button" className="button secondary small" disabled={checkingDecision} onClick={() => void checkDecisionConnection()}>{checkingDecision ? <Loader2 size={14} className="spin" aria-hidden="true" /> : <Plug2 size={14} aria-hidden="true" />}{checkingDecision ? "確認中" : "接続を確認"}</button><a className="text-button" href="https://developers.openai.com/api/docs/guides/decisions" target="_blank" rel="noreferrer">公式ドキュメント<ArrowUpRight size={13} /></a></section>
-      <section><h3>dots / MCP <span className="connection-status">{agentProposals.length ? "エージェントの提案を受信" : "dotsで初回設定が必要"}</span></h3><p>dotsが変更連絡を整理して候補を作り、サイトに保存できます。受信した提案は表の上に表示され、主催者が比較して反映します。自動反映はしません。</p><p>「dotsへの指示をコピー」を押し、あなたのdotに送ってください。プラグインの初回接続もdot側で確認してください。MCPの利用だけではdotsの稼働状態は判定できません。</p><div className="connection-actions"><button type="button" className="button secondary small" onClick={() => void copy(dotSetupInstructions(window.location.origin), "dotsへの指示をコピーしました。dotの会話に貼り付けてください。")}>dotsへの指示をコピー</button><button type="button" className="text-button" onClick={() => void copy(window.location.origin + "/mcp", "MCPのURLをコピーしました。")}>MCPのURLをコピー</button></div>{agentLoadError && <p className="form-error">{agentLoadError}</p>}<a className="text-button" href="https://learn.chatgpt.com/docs/dots/getting-started" target="_blank" rel="noreferrer">dotsの設定方法<ArrowUpRight size={13} /></a></section>
+      <section><h3>dots / MCP <span className="connection-status">{agentProposals.length ? "エージェントの提案を受信" : "dotsで初回設定が必要"}</span></h3><p>dotsが変更連絡を整理し、Decisionsで候補を比較します。返されたリンクからサイトで再比較し、主催者が反映できます。自動反映はしません。</p><p>「dotsへの指示をコピー」を押し、あなたのdotに送ってください。既存の3ツールで利用できます。追加ツールが利用できる場合は、サイトへの提案の保存にも対応します。MCPの利用だけではdotsの稼働状態は判定できません。</p><div className="connection-actions"><button type="button" className="button secondary small" onClick={() => void copy(dotSetupInstructions(window.location.origin), "dotsへの指示をコピーしました。dotの会話に貼り付けてください。")}>dotsへの指示をコピー</button><button type="button" className="text-button" onClick={() => void copy(window.location.origin + "/mcp", "MCPのURLをコピーしました。")}>MCPのURLをコピー</button></div>{agentLoadError && <p className="form-error">{agentLoadError}</p>}<a className="text-button" href="https://learn.chatgpt.com/docs/dots/getting-started" target="_blank" rel="noreferrer">dotsの設定方法<ArrowUpRight size={13} /></a></section>
       <section><h3>保存</h3><p>{storage === "cloud" ? "イベントはクラウドに保存されています。" : "現在はこの端末に保存されています。"}</p><p>所有者専用の非公開アプリです。URLを共有しても閲覧権限は付与されません。</p></section>
     </div></Dialog>}
     {resetOpen && <Dialog title="サンプルに戻しますか？" subtitle="現在のイベントを置き換えます。必要なら先にバックアップしてください。" onClose={() => setResetOpen(false)}><div className="form-body"><button className="button secondary" onClick={() => exportFile("json")}><ArrowDownToLine size={15} />バックアップを書き出す</button></div><footer className="modal-footer"><span /><div><button className="button secondary" onClick={() => setResetOpen(false)}>キャンセル</button><button className="button primary" onClick={() => { commit(structuredClone(demoState), historyItem("サンプルイベントを読み込み", "Community Day 2026の進行に戻しました。", "create")); setResetOpen(false); setFilter("all"); notify("サンプルイベントに戻しました。"); }}>サンプルに戻す</button></div></footer></Dialog>}
