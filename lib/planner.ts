@@ -150,7 +150,11 @@ function cloneSlots(slots: EventSlot[]): EventSlot[] {
   return slots.map((slot) => ({
     ...slot,
     people: [...slot.people],
-    ...(slot.members ? { members: slot.members.map((member) => ({ ...member, roles: [...member.roles] })) } : {}),
+    ...(slot.members ? { members: slot.members.map((member) => ({
+      ...member,
+      roles: [...member.roles],
+      ...(member.roleIcons ? { roleIcons: { ...member.roleIcons } } : {}),
+    })) } : {}),
     equipment: [...slot.equipment],
   }));
 }

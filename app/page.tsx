@@ -14,7 +14,7 @@ import type { DecisionsConnectionResult, PlanningResult } from "@/lib/decisions"
 import type { ChangeRequest } from "@/lib/change-requests";
 import { getEventTiming, getTimedSchedule } from "@/lib/event-timing";
 import { MemberEditor } from "@/components/member-editor";
-import { getSlotMembers } from "@/lib/member-roles";
+import { getMemberRole, getSlotMembers, isMemberRoleIcon } from "@/lib/member-roles";
 import type { SlotMember } from "@/lib/types";
 
 type SaveStatus = "loading" | "saved" | "saving" | "local" | "error";
@@ -73,7 +73,11 @@ function SlotForm({ slot, currentStart, onSave, onClose, onDelete }: { slot: Eve
       if (!title) { setError("タイトルを入力してください。"); return; }
       // The switch applies to this entire member table. Per-member flags remain
       // the storage format so old events and saved proposals stay compatible.
-      const cleanedMembers = members.filter(member => member.name.trim() || member.roles.some(role => role.trim())).map(member => ({ name: member.name.trim(), roles: rolesOptional ? [] : [...new Set(member.roles.map(role => role.trim()).filter(Boolean))], ...(rolesOptional ? { roleNotRequired: true } : {}) }));
+      const cleanedMembers = members.filter(member => member.name.trim() || member.roles.some(role => role.trim())).map(member => {
+        const roles = rolesOptional ? [] : [...new Set(member.roles.map(role => role.trim()).filter(Boolean))];
+        const roleIcons = Object.fromEntries(Object.entries(member.roleIcons ?? {}).filter(([role, icon]) => roles.includes(role.trim()) && isMemberRoleIcon(icon.trim())).map(([role, icon]) => [role.trim(), icon.trim()]));
+        return { name: member.name.trim(), roles, ...(Object.keys(roleIcons).length ? { roleIcons } : {}), ...(rolesOptional ? { roleNotRequired: true } : {}) };
+      });
       if (cleanedMembers.some(member => !member.name)) { setError("担当を設定したメンバーの名前を入力してください。"); return; }
       if (cleanedMembers.some(member => !member.roles.length && !member.roleNotRequired)) { setError("名前と楽器・役職の両方を入力してください。役職が不要なら「役職なし」を選んでください。"); return; }
       if (cleanedMembers.length > 30 || cleanedMembers.some(member => member.name.length > 160 || member.roles.length > 12 || member.roles.some(role => role.length > 40))) { setError("メンバーは30人まで、担当は1人12件・各40文字までにしてください。"); return; }
@@ -86,7 +90,10 @@ function SlotForm({ slot, currentStart, onSave, onClose, onDelete }: { slot: Eve
         <label className="field">出演者・グループ名<input name="group" placeholder="例：チーム Horizon" maxLength={160} defaultValue={slot?.group} /></label>
         <MemberEditor members={members} onChange={setMembers} rolesOptional={rolesOptional} onRolesOptionalChange={optional => {
           setRolesOptional(optional);
-          setMembers(members.map(member => ({ ...member, roles: optional ? [] : [...member.roles], roleNotRequired: optional ? true : undefined })));
+          setMembers(members.map(member => {
+            const { roleIcons, ...rest } = member;
+            return { ...rest, roles: optional ? [] : [...member.roles], ...(!optional && roleIcons ? { roleIcons: { ...roleIcons } } : {}), roleNotRequired: optional ? true : undefined };
+          }));
         }} />
         <div className="form-grid"><label className="field">本編の時間<div className="input-unit"><input type="number" min="1" max="240" name="duration" defaultValue={slot?.durationMinutes ?? 20} required /><span>分</span></div></label><label className="field">この枠の前の準備・転換<div className="input-unit"><input type="number" min="0" max="90" name="changeover" defaultValue={slot?.changeoverMinutes ?? 5} required /><span>分</span></div></label></div>
         <details className="advanced-fields"><summary>機材・詳細条件{slot?.locked ? "（時刻固定）" : ""}</summary><div className="advanced-fields-body">
@@ -446,7 +453,7 @@ export default function Home() {
   }
   function exportFile(type: "csv" | "json") {
     const quote = (s: string | number) => '"' + String(s).replaceAll('"', '""') + '"';
-    const content = type === "json" ? JSON.stringify(state, null, 2) : "\uFEFF" + ["開始,終了,タイトル,出演者・グループ,カテゴリー,本編(分),転換(分),メンバー,設備,メモ", ...schedule.rows.map(r => [formatTime(r.start), formatTime(r.end), r.title, r.group, KIND[r.kind].label, r.durationMinutes, r.changeoverMinutes, getSlotMembers(r).map(member => member.name + (member.roles.length ? ` (${member.roles.join(" / ")})` : "")).join(" / "), r.equipment.join(" / "), r.notes].map(quote).join(","))].join("\r\n");
+    const content = type === "json" ? JSON.stringify(state, null, 2) : "\uFEFF" + ["開始,終了,タイトル,出演者・グループ,カテゴリー,本編(分),転換(分),メンバー,設備,メモ", ...schedule.rows.map(r => [formatTime(r.start), formatTime(r.end), r.title, r.group, KIND[r.kind].label, r.durationMinutes, r.changeoverMinutes, getSlotMembers(r).map(member => member.name + (member.roles.length ? ` (${member.roles.map(role => member.roleIcons && Object.hasOwn(member.roleIcons, role) ? `${getMemberRole(role, member.roleIcons).icon} ${role}` : role).join(" / ")})` : "")).join(" / "), r.equipment.join(" / "), r.notes].map(quote).join(","))].join("\r\n");
     const url = URL.createObjectURL(new Blob([content], { type: type === "json" ? "application/json" : "text/csv;charset=utf-8" })), a = document.createElement("a"); a.href = url; a.download = `timetable-${state.event.date}.${type}`; a.click(); URL.revokeObjectURL(url); notify(type === "csv" ? "進行表をCSVで書き出しました。" : "イベントのバックアップを書き出しました。");
   }
   async function copy(text: string, success: string) { try { await navigator.clipboard.writeText(text); notify(success); } catch { notify("クリップボードを利用できません。ブラウザのURLをコピーしてください。"); } }

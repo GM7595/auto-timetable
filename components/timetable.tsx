@@ -61,7 +61,7 @@ export function Timetable({ rows, allRows, originalRows, preview, onEdit }: Time
               {members.length > 0 && <ul className="run-table-members" aria-label="メンバー">{members.map(member => <li className="run-table-member" key={member.name}>
                 <span className="run-table-member-name"><UserRound size={12} aria-hidden="true" /><span>{member.name}</span></span>
                 {member.roles.map(value => {
-                  const role = getMemberRole(value);
+                  const role = getMemberRole(value, member.roleIcons);
                   return <span className="run-table-member-role" key={value} title={role.name}><span aria-hidden="true">{role.icon}</span><span>{role.label}</span>{role.name !== role.label && <span className="run-table-visually-hidden">（{role.name}）</span>}</span>;
                 })}
               </li>)}</ul>}

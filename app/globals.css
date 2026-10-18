@@ -411,6 +411,13 @@ input,select,textarea { min-width:0; }
 .member-role-chip { display:inline-flex; align-items:center; gap:4px; max-width:100%; min-height:28px; padding:3px 7px; color:var(--accent-text); background:var(--surface-selected); border:1px solid var(--accent-border); border-radius:4px; font-size:12px; }
 .member-role-chip>span:nth-child(2) { overflow-wrap:anywhere; }
 .member-role-chip:hover { border-color:var(--accent-selected-border); }
+.member-role-custom-chip { gap:0; padding:0; }
+.member-role-chip-emoji,.member-role-chip-remove { display:inline-flex; align-items:center; justify-content:center; gap:4px; min-height:26px; padding:3px 6px; color:inherit; background:transparent; border:0; border-radius:3px; font-size:12px; }
+.member-role-chip-emoji { align-self:stretch; flex-shrink:0; border-right:1px solid var(--accent-border); }
+.member-role-chip-remove { min-width:0; }
+.member-role-chip-remove>span { overflow-wrap:anywhere; }
+.member-role-chip-remove>svg { flex-shrink:0; }
+.member-role-chip-emoji:hover,.member-role-chip-emoji[aria-expanded="true"],.member-role-chip-remove:hover { background:var(--surface-hover); }
 .member-role-picker-toggle { display:inline-flex; align-items:center; gap:3px; min-height:28px; padding:3px 6px; color:var(--secondary); background:transparent; border:1px dashed var(--control-border); border-radius:4px; font-size:12px; }
 .member-role-picker-toggle:hover,.member-role-picker-toggle[aria-expanded="true"] { color:var(--accent-text); border-color:var(--accent-selected-border); }
 .member-editor-table .member-editor-picker-row>td { padding:0 9px 9px; border-top:0; }
@@ -424,10 +431,24 @@ input,select,textarea { min-width:0; }
 .member-role-option:hover::after,.member-role-option:focus-visible::after { display:block; }
 .member-role-custom { display:flex; align-items:center; gap:6px; margin-top:11px; }
 .member-role-custom>input { min-height:32px; font-size:12px; }
+.member-role-emoji-toggle { display:inline-flex; flex-shrink:0; align-items:center; justify-content:center; width:34px; min-height:32px; padding:3px; background:var(--surface); border:1px solid var(--control-border); border-radius:4px; font-size:19px; }
+.member-role-emoji-toggle:hover,.member-role-emoji-toggle[aria-expanded="true"] { background:var(--surface-selected); border-color:var(--accent-selected-border); }
+.member-role-emoji-picker { margin-top:9px; padding-top:9px; border-top:1px solid var(--border); }
+.member-role-picker>.member-role-emoji-picker:first-child { margin-top:0; padding-top:0; border-top:0; }
+.member-role-emoji-heading { margin:0 0 7px; color:var(--secondary); font-size:11px; overflow-wrap:anywhere; }
+.member-role-emoji-options { display:grid; grid-template-columns:repeat(auto-fit,minmax(30px,1fr)); gap:4px; }
+.member-role-emoji-option { display:flex; align-items:center; justify-content:center; min-width:0; min-height:32px; padding:3px; background:var(--surface); border:1px solid transparent; border-radius:4px; font-size:20px; line-height:1.2; }
+.member-role-emoji-option:hover { background:var(--surface-hover); }
+.member-role-emoji-option[aria-pressed="true"] { background:var(--surface-selected); border-color:var(--accent-selected-border); }
+.member-role-emoji-manual { display:flex; gap:6px; margin-top:8px; }
+.member-role-emoji-manual>input { flex:1; width:100%; min-width:0; min-height:32px; padding:5px 8px; color:var(--foreground); background:var(--surface); border:1px solid var(--control-border); border-radius:4px; font-size:12px; }
+.member-role-emoji-manual>input:focus { border-color:var(--focus); }
+.member-role-emoji-manual>input::placeholder { color:var(--placeholder); opacity:1; }
+.member-role-emoji-manual>input[aria-invalid="true"] { border-color:var(--danger); }
 .member-editor-add,.member-editor-start { min-height:28px; }
 .member-role-limit { margin:7px 0 0; color:var(--secondary); font-size:11px; }
 @media (max-width:760px) {
-  .member-editor-name-row>input,.member-role-custom>input { min-height:38px; font-size:16px; }
+  .member-editor-name-row>input,.member-role-custom>input,.member-role-emoji-manual>input { min-height:38px; font-size:16px; }
   .member-editor-table .member-editor-action-column { width:34px; }
   .member-editor-table th { padding:6px 5px; }
   .member-editor-table td { padding:7px 5px; }
@@ -440,4 +461,7 @@ input,select,textarea { min-width:0; }
   .member-role-picker-toggle { padding:3px 4px; font-size:11px; }
   .member-role-picker { padding:8px; }
   .member-role-presets { gap:4px; }
+  .member-role-custom { gap:4px; }
+  .member-role-custom>input { padding:6px; }
+  .member-role-emoji-toggle { width:32px; min-height:38px; }
 }

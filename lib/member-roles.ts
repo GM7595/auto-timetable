@@ -14,8 +14,20 @@ export const MAX_MEMBER_ROLES = 12;
 export const MAX_MEMBER_NAME_LENGTH = 160;
 export const MAX_MEMBER_ROLE_LENGTH = 40;
 
-export function getMemberRole(role: string): { label: string; name: string; icon: string } {
-  return MEMBER_ROLE_PRESETS.find(preset => preset.label === role) ?? { label: role, name: role, icon: "🏷️" };
+/** One emoji grapheme, including modifiers, ZWJ sequences, flags, and keycaps. */
+export function isMemberRoleIcon(value: string): boolean {
+  if (typeof value !== "string" || !value || value.length > 32 || value !== value.trim()) return false;
+  if (Array.from(new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(value)).length !== 1) return false;
+  return /^[#*0-9]\uFE0F?\u20E3$/u.test(value)
+    || /^\p{Regional_Indicator}{2}$/u.test(value)
+    || /^\p{Extended_Pictographic}[\p{Extended_Pictographic}\p{Emoji_Modifier}\uFE0F\u200D\u{E0020}-\u{E007F}]*$/u.test(value);
+}
+
+export function getMemberRole(role: string, roleIcons?: Record<string, string>): { label: string; name: string; icon: string } {
+  const preset = MEMBER_ROLE_PRESETS.find(preset => preset.label === role);
+  if (preset) return preset;
+  const icon = roleIcons && Object.hasOwn(roleIcons, role) ? roleIcons[role] : undefined;
+  return { label: role, name: role, icon: icon && isMemberRoleIcon(icon) ? icon : "🏷️" };
 }
 
 /** people remains the canonical participation list, including legacy name-only entries. */
@@ -26,6 +38,7 @@ export function getSlotMembers(slot: Pick<EventSlot, "people" | "members">): Slo
       ...(stored ?? { roleNotRequired: true }),
       name,
       roles: [...(stored?.roles ?? [])],
+      ...(stored?.roleIcons ? { roleIcons: { ...stored.roleIcons } } : {}),
     };
   });
 }

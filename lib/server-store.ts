@@ -7,17 +7,43 @@ import type { EventState } from "@/lib/types";
 const MAX_BODY_BYTES = 512 * 1024;
 const minute = z.number().int().min(0).max(2880);
 const shortText = z.string().trim().min(1).max(160);
+// Keep this dependency-free check aligned with member-roles and saved results.
+const roleIcons = z.custom<Record<string, string>>().superRefine((value, context) => {
+  if (!value || typeof value !== "object" || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
+    context.addIssue({ code: "custom", message: "役職の絵文字は役職名との組で指定してください。" });
+    return;
+  }
+  const entries = Object.entries(value);
+  if (entries.length > 12) context.addIssue({ code: "custom", message: "役職の絵文字は12件まで指定できます。" });
+  const labels = new Set<string>();
+  for (const [label, icon] of entries) {
+    const normalized = label.trim();
+    if (!normalized || normalized.length > 40 || labels.has(normalized)) {
+      context.addIssue({ code: "custom", path: [label], message: "役職名が無効または重複しています。" });
+    }
+    labels.add(normalized);
+    const emoji = typeof icon === "string" ? icon.trim() : "";
+    const valid = emoji.length > 0 && emoji.length <= 32
+      && Array.from(new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(emoji)).length === 1
+      && (/^[#*0-9]\uFE0F?\u20E3$/u.test(emoji) || /^\p{Regional_Indicator}{2}$/u.test(emoji) || /^\p{Extended_Pictographic}[\p{Extended_Pictographic}\p{Emoji_Modifier}\uFE0F\u200D\u{E0020}-\u{E007F}]*$/u.test(emoji));
+    if (!valid) context.addIssue({ code: "custom", path: [label], message: "絵文字を1つ選んでください。" });
+  }
+}).transform((value) => Object.fromEntries(Object.entries(value as Record<string, string>).map(([label, icon]) => [label.trim(), icon.trim()])));
 const members = z.array(z.object({
   name: shortText,
   roles: z.array(z.string().trim().min(1).max(40)).max(12)
     .refine((roles) => new Set(roles).size === roles.length, "同じ役割を重複して選択できません。"),
   roleNotRequired: z.boolean().optional(),
+  roleIcons: roleIcons.optional(),
 }).strict().superRefine((member, context) => {
   if (member.roles.length === 0 && member.roleNotRequired !== true) {
     context.addIssue({ code: "custom", path: ["roles"], message: "役職を選ぶか「役職なし」を指定してください。" });
   }
   if (member.roles.length > 0 && member.roleNotRequired === true) {
     context.addIssue({ code: "custom", path: ["roleNotRequired"], message: "役職と「役職なし」は同時に指定できません。" });
+  }
+  for (const label of Object.keys(member.roleIcons ?? {})) {
+    if (!member.roles.includes(label)) context.addIssue({ code: "custom", path: ["roleIcons", label], message: "絵文字には選択済みの役職名を指定してください。" });
   }
 })).max(30)
   .refine((entries) => new Set(entries.map((member) => member.name)).size === entries.length, "メンバー名が重複しています。");

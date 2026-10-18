@@ -4,6 +4,8 @@ export interface SlotMember {
   name: string;
   /** Multiple instruments or custom event roles, in display order. */
   roles: string[];
+  /** Optional custom emoji, keyed by a selected role's exact label. */
+  roleIcons?: Record<string, string>;
   /** Explicitly permits a name-only member. Cannot accompany selected roles. */
   roleNotRequired?: boolean;
 }
