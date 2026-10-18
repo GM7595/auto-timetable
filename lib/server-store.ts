@@ -7,6 +7,20 @@ import type { EventState } from "@/lib/types";
 const MAX_BODY_BYTES = 512 * 1024;
 const minute = z.number().int().min(0).max(2880);
 const shortText = z.string().trim().min(1).max(160);
+const members = z.array(z.object({
+  name: shortText,
+  roles: z.array(z.string().trim().min(1).max(40)).max(12)
+    .refine((roles) => new Set(roles).size === roles.length, "同じ役割を重複して選択できません。"),
+  roleNotRequired: z.boolean().optional(),
+}).strict().superRefine((member, context) => {
+  if (member.roles.length === 0 && member.roleNotRequired !== true) {
+    context.addIssue({ code: "custom", path: ["roles"], message: "役職を選ぶか「役職なし」を指定してください。" });
+  }
+  if (member.roles.length > 0 && member.roleNotRequired === true) {
+    context.addIssue({ code: "custom", path: ["roleNotRequired"], message: "役職と「役職なし」は同時に指定できません。" });
+  }
+})).max(30)
+  .refine((entries) => new Set(entries.map((member) => member.name)).size === entries.length, "メンバー名が重複しています。");
 const identifier = z.string().min(1).max(120);
 const eventDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
   const parsed = new Date(`${value}T00:00:00Z`);
@@ -21,6 +35,7 @@ const slotSchema = z.object({
   durationMinutes: z.number().int().min(1).max(720),
   changeoverMinutes: z.number().int().min(0).max(180),
   people: z.array(shortText).max(30),
+  members: members.optional(),
   equipment: z.array(shortText).max(30),
   earliestStart: minute.optional(),
   latestEnd: minute.optional(),
@@ -75,6 +90,9 @@ export const eventStateSchema = z.object({
     }
   });
   state.slots.forEach((slot, index) => {
+    if (slot.members && (slot.members.length !== slot.people.length || slot.members.some((member, memberIndex) => member.name !== slot.people[memberIndex]))) {
+      context.addIssue({ code: "custom", path: ["slots", index, "members"], message: "メンバー名と出演者名を同じ順序で指定してください。" });
+    }
     if (slot.earliestStart !== undefined && slot.latestEnd !== undefined && slot.earliestStart >= slot.latestEnd) {
       context.addIssue({ code: "custom", path: ["slots", index], message: "出演可能時間の開始と終了を確認してください。" });
     }

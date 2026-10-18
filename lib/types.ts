@@ -1,5 +1,13 @@
 export type SlotKind = "talk" | "workshop" | "live" | "break" | "other";
 
+export interface SlotMember {
+  name: string;
+  /** Multiple instruments or custom event roles, in display order. */
+  roles: string[];
+  /** Explicitly permits a name-only member. Cannot accompany selected roles. */
+  roleNotRequired?: boolean;
+}
+
 export interface EventSlot {
   id: string;
   title: string;
@@ -9,6 +17,8 @@ export interface EventSlot {
   /** Preparation time immediately before this slot. */
   changeoverMinutes: number;
   people: string[];
+  /** Optional for legacy data. Names match people in the same order. */
+  members?: SlotMember[];
   equipment: string[];
   earliestStart?: number;
   latestEnd?: number;

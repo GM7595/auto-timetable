@@ -13,6 +13,9 @@ import type { AgentProposal } from "@/lib/agent-proposals";
 import type { DecisionsConnectionResult, PlanningResult } from "@/lib/decisions";
 import type { ChangeRequest } from "@/lib/change-requests";
 import { getEventTiming, getTimedSchedule } from "@/lib/event-timing";
+import { MemberEditor } from "@/components/member-editor";
+import { getSlotMembers } from "@/lib/member-roles";
+import type { SlotMember } from "@/lib/types";
 
 type SaveStatus = "loading" | "saved" | "saving" | "local" | "error";
 type EventDeliveryStatus = { activeSubscriptions: number; pendingDeliveries: number; failedDeliveries?: number; lastDeliveredAt: string | null; lastFailure?: string | null };
@@ -56,7 +59,10 @@ function Dialog({ title, subtitle, onClose, children }: { title: string; subtitl
 }
 
 function SlotForm({ slot, currentStart, onSave, onClose, onDelete }: { slot: EventSlot | null; currentStart?: number; onSave: (slot: EventSlot) => void; onClose: () => void; onDelete?: () => void }) {
-  const [error, setError] = useState("");
+  const [error, setError] = useState(""), [members, setMembers] = useState<SlotMember[]>(() => {
+    const existing = getSlotMembers(slot ?? { people: [] });
+    return existing.length ? existing : [{ name: "", roles: [] }];
+  });
   return <Dialog title={slot ? "進行枠を編集" : "進行枠を追加"} subtitle="出演者・所要時間・準備条件をまとめて管理します。" onClose={onClose}>
     <form onSubmit={e => {
       e.preventDefault(); const data = new FormData(e.currentTarget);
@@ -64,16 +70,22 @@ function SlotForm({ slot, currentStart, onSave, onClose, onDelete }: { slot: Eve
       if (earliest && latest && parseTime(earliest) >= parseTime(latest)) { setError("出演可能時間の終了は開始より後にしてください。"); return; }
       const title = String(data.get("title") || "").trim();
       if (!title) { setError("タイトルを入力してください。"); return; }
+      const cleanedMembers = members.map(member => ({ name: member.name.trim(), roles: [...new Set(member.roles.map(role => role.trim()).filter(Boolean))], ...(member.roleNotRequired ? { roleNotRequired: true } : {}) })).filter(member => member.name || member.roles.length || member.roleNotRequired);
+      if (cleanedMembers.some(member => !member.name)) { setError("担当を設定したメンバーの名前を入力してください。"); return; }
+      if (cleanedMembers.some(member => !member.roles.length && !member.roleNotRequired)) { setError("名前と楽器・役職の両方を入力してください。役職が不要なら「役職なし」を選んでください。"); return; }
+      if (cleanedMembers.some(member => member.roles.length > 0 && member.roleNotRequired)) { setError("「役職なし」を選ぶ場合は、選択した楽器・役職を解除してください。"); return; }
+      if (cleanedMembers.length > 30 || cleanedMembers.some(member => member.name.length > 160 || member.roles.length > 12 || member.roles.some(role => role.length > 40))) { setError("メンバーは30人まで、担当は1人12件・各40文字までにしてください。"); return; }
+      if (new Set(cleanedMembers.map(member => member.name)).size !== cleanedMembers.length) { setError("同じ名前のメンバーが重複しています。複数の担当は1人にまとめて設定してください。"); return; }
       const locked = data.get("locked") === "on";
-      onSave({ id: slot?.id ?? uid(), title, group: String(data.get("group") || "").trim(), kind: String(data.get("kind")) as EventSlot["kind"], durationMinutes: Number(data.get("duration")), changeoverMinutes: Number(data.get("changeover")), people: peopleList(String(data.get("people") || "")), equipment: peopleList(String(data.get("equipment") || "")), earliestStart: earliest ? parseTime(earliest) : undefined, latestEnd: latest ? parseTime(latest) : undefined, fixedStart: slot?.status === "done" || slot?.status === "active" ? slot.fixedStart ?? currentStart : locked ? slot?.fixedStart ?? currentStart : undefined, locked, status: slot?.status ?? "planned", energy: Number(data.get("energy")), notes: String(data.get("notes") || "").trim() });
+      onSave({ id: slot?.id ?? uid(), title, group: String(data.get("group") || "").trim(), kind: String(data.get("kind")) as EventSlot["kind"], durationMinutes: Number(data.get("duration")), changeoverMinutes: Number(data.get("changeover")), people: cleanedMembers.map(member => member.name), members: cleanedMembers, equipment: peopleList(String(data.get("equipment") || "")), earliestStart: earliest ? parseTime(earliest) : undefined, latestEnd: latest ? parseTime(latest) : undefined, fixedStart: slot?.status === "done" || slot?.status === "active" ? slot.fixedStart ?? currentStart : locked ? slot?.fixedStart ?? currentStart : undefined, locked, status: slot?.status ?? "planned", energy: Number(data.get("energy")), notes: String(data.get("notes") || "").trim() });
     }}>
       <div className="form-body">
         <label className="field">タイトル <span className="required">必須</span><input name="title" placeholder="例：プロダクトデモ＆トーク" maxLength={160} required defaultValue={slot?.title} /></label>
         <label className="field">出演者・グループ名<input name="group" placeholder="例：チーム Horizon" maxLength={160} defaultValue={slot?.group} /></label>
+        <MemberEditor members={members} onChange={setMembers} />
         <div className="form-grid"><label className="field">本編の時間<div className="input-unit"><input type="number" min="1" max="240" name="duration" defaultValue={slot?.durationMinutes ?? 20} required /><span>分</span></div></label><label className="field">この枠の前の準備・転換<div className="input-unit"><input type="number" min="0" max="90" name="changeover" defaultValue={slot?.changeoverMinutes ?? 5} required /><span>分</span></div></label></div>
-        <details className="advanced-fields"><summary>メンバー・機材・詳細条件{slot?.locked ? "（時刻固定）" : ""}</summary><div className="advanced-fields-body">
+        <details className="advanced-fields"><summary>機材・詳細条件{slot?.locked ? "（時刻固定）" : ""}</summary><div className="advanced-fields-body">
         <label className="field">カテゴリー<select name="kind" defaultValue={slot?.kind ?? "talk"}>{Object.entries(KIND).map(([key, value]) => <option key={key} value={key}>{value.label}</option>)}</select></label>
-        <label className="field">担当メンバー<input name="people" placeholder="例：田中、鈴木、佐藤（読点で区切る）" defaultValue={slot?.people.join("、")} maxLength={1000} /></label>
         <label className="field">必要な設備・機材<input name="equipment" placeholder="例：マイク、プロジェクター" defaultValue={slot?.equipment.join("、")} maxLength={1000} /></label>
         <div className="field-section"><span>出演可能時間 <small>指定がない場合は空欄</small></span><div className="form-grid"><label className="field">この時刻以降<input type="time" name="earliest" defaultValue={slot?.earliestStart === undefined ? "" : formatTime(slot.earliestStart)} /></label><label className="field">この時刻までに終了<input type="time" name="latest" defaultValue={slot?.latestEnd === undefined ? "" : formatTime(slot.latestEnd)} /></label></div></div>
         <label className="field">雰囲気・エネルギー<select name="energy" defaultValue={slot?.energy ?? 3}><option value="1">1 — 落ち着いて聴く</option><option value="2">2 — ゆったり楽しむ</option><option value="3">3 — バランスよく</option><option value="4">4 — 活気をつくる</option><option value="5">5 — 会場を盛り上げる</option></select></label>
@@ -429,7 +441,7 @@ export default function Home() {
   }
   function exportFile(type: "csv" | "json") {
     const quote = (s: string | number) => '"' + String(s).replaceAll('"', '""') + '"';
-    const content = type === "json" ? JSON.stringify(state, null, 2) : "\uFEFF" + ["開始,終了,タイトル,出演者・グループ,カテゴリー,本編(分),転換(分),メンバー,設備,メモ", ...schedule.rows.map(r => [formatTime(r.start), formatTime(r.end), r.title, r.group, KIND[r.kind].label, r.durationMinutes, r.changeoverMinutes, r.people.join(" / "), r.equipment.join(" / "), r.notes].map(quote).join(","))].join("\r\n");
+    const content = type === "json" ? JSON.stringify(state, null, 2) : "\uFEFF" + ["開始,終了,タイトル,出演者・グループ,カテゴリー,本編(分),転換(分),メンバー,設備,メモ", ...schedule.rows.map(r => [formatTime(r.start), formatTime(r.end), r.title, r.group, KIND[r.kind].label, r.durationMinutes, r.changeoverMinutes, getSlotMembers(r).map(member => member.name + (member.roles.length ? ` (${member.roles.join(" / ")})` : "")).join(" / "), r.equipment.join(" / "), r.notes].map(quote).join(","))].join("\r\n");
     const url = URL.createObjectURL(new Blob([content], { type: type === "json" ? "application/json" : "text/csv;charset=utf-8" })), a = document.createElement("a"); a.href = url; a.download = `timetable-${state.event.date}.${type}`; a.click(); URL.revokeObjectURL(url); notify(type === "csv" ? "進行表をCSVで書き出しました。" : "イベントのバックアップを書き出しました。");
   }
   async function copy(text: string, success: string) { try { await navigator.clipboard.writeText(text); notify(success); } catch { notify("クリップボードを利用できません。ブラウザのURLをコピーしてください。"); } }

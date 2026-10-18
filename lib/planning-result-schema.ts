@@ -1,11 +1,26 @@
 import { z } from "zod";
 
 const number = z.number().finite();
+const members = z.array(z.object({
+  name: z.string().trim().min(1).max(160),
+  roles: z.array(z.string().trim().min(1).max(40)).max(12)
+    .refine((roles) => new Set(roles).size === roles.length, "同じ役割を重複して選択できません。"),
+  roleNotRequired: z.boolean().optional(),
+}).strict().superRefine((member, context) => {
+  if (member.roles.length === 0 && member.roleNotRequired !== true) {
+    context.addIssue({ code: "custom", path: ["roles"], message: "役職を選ぶか「役職なし」を指定してください。" });
+  }
+  if (member.roles.length > 0 && member.roleNotRequired === true) {
+    context.addIssue({ code: "custom", path: ["roleNotRequired"], message: "役職と「役職なし」は同時に指定できません。" });
+  }
+})).max(30)
+  .refine((entries) => new Set(entries.map((member) => member.name)).size === entries.length, "メンバー名が重複しています。");
 const slot = z.object({
   id: z.string().min(1).max(120), title: z.string().max(160), group: z.string().max(160),
   kind: z.enum(["talk", "workshop", "live", "break", "other"]),
   durationMinutes: z.number().int().min(1).max(720), changeoverMinutes: z.number().int().min(0).max(180),
   people: z.array(z.string().max(160)).max(30), equipment: z.array(z.string().max(160)).max(30),
+  members: members.optional(),
   earliestStart: number.optional(), latestEnd: number.optional(), fixedStart: number.optional(),
   locked: z.boolean(), status: z.enum(["planned", "active", "done"]), energy: number, notes: z.string().max(2000),
 }).strict();
@@ -37,4 +52,14 @@ export const planningResultSchema = z.object({
     httpStatus: z.number().int().min(100).max(599).optional(),
     errorCode: z.enum(["invalid_api_key", "insufficient_quota", "rate_limit_exceeded", "model_not_found", "permission_denied", "invalid_request_error", "unsupported_country_region_territory", "unknown"]).optional(),
   }).strict().optional(),
-}).strict();
+}).strict().superRefine((result, context) => {
+  result.plans.forEach((plan, planIndex) => {
+    const checkMembers = (entry: z.infer<typeof slot>, path: (string | number)[]) => {
+      if (entry.members && (entry.members.length !== entry.people.length || entry.members.some((member, index) => member.name !== entry.people[index]))) {
+        context.addIssue({ code: "custom", path: [...path, "members"], message: "メンバー名と出演者名を同じ順序で指定してください。" });
+      }
+    };
+    plan.slots.forEach((entry, index) => checkMembers(entry, ["plans", planIndex, "slots", index]));
+    plan.schedule.rows.forEach((entry, index) => checkMembers(entry, ["plans", planIndex, "schedule", "rows", index]));
+  });
+});

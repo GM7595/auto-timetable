@@ -112,7 +112,7 @@ async function choosePlan(state: EventState, issue: Issue, plans: Plan[]): Promi
             description: plan.description,
             changes: plan.changes,
             tradeoffs: plan.tradeoffs,
-            program: plan.schedule.rows.map((row) => ({ title: row.title, group: row.group, kind: row.kind, start: row.start, end: row.end, people: row.people, equipment: row.equipment, notes: row.notes })),
+            program: plan.schedule.rows.map((row) => ({ title: row.title, group: row.group, kind: row.kind, start: row.start, end: row.end, people: row.people, ...(row.members ? { members: row.members } : {}), equipment: row.equipment, notes: row.notes })),
             bufferMinutes: plan.schedule.bufferMinutes,
           })),
         }),

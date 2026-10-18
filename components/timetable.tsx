@@ -1,6 +1,7 @@
 "use client";
 
-import { AlertCircle, Check, LockKeyhole, Pencil, UsersRound } from "lucide-react";
+import { AlertCircle, Check, LockKeyhole, Pencil, UserRound, UsersRound } from "lucide-react";
+import { getMemberRole, getSlotMembers } from "@/lib/member-roles";
 import { formatTime } from "@/lib/planner";
 import type { ScheduledSlot } from "@/lib/types";
 
@@ -42,6 +43,7 @@ export function Timetable({ rows, allRows, originalRows, preview, onEdit }: Time
         const setup = index === 0 ? 0 : Math.max(0, row.changeoverMinutes);
         const prepEnd = row.changeoverStart + setup;
         const group = row.group.trim();
+        const members = getSlotMembers(row);
         return <tbody className="run-table-slot" key={row.id}>
           {setup > 0 && <tr className="run-table-transition">
             <td className="run-table-time"><TimeRange start={row.changeoverStart} end={prepEnd} /></td>
@@ -56,6 +58,13 @@ export function Timetable({ rows, allRows, originalRows, preview, onEdit }: Time
           <tr aria-current={status === "active" ? "step" : undefined} className={`run-table-main run-table-${status}${changed ? " run-table-changed" : ""}${row.violations.length ? " run-table-invalid" : ""}`}>
             <td className="run-table-time"><TimeRange start={row.start} end={row.end} />{changedTime && original && <span className="run-table-old-time">旧 {formatTime(original.row.start)}–{formatTime(original.row.end)}</span>}</td>
             <td className="run-table-content"><div className="run-table-title-line"><strong>{row.title}</strong>{changed && <span className="run-table-change-badge">変更</span>}</div>{group && group !== row.title && <span className="run-table-group"><UsersRound size={13} aria-hidden="true" /><span>{group}</span></span>}
+              {members.length > 0 && <ul className="run-table-members" aria-label="メンバー">{members.map(member => <li className="run-table-member" key={member.name}>
+                <span className="run-table-member-name"><UserRound size={12} aria-hidden="true" /><span>{member.name}</span></span>
+                {member.roles.map(value => {
+                  const role = getMemberRole(value);
+                  return <span className="run-table-member-role" key={value} title={role.name}><span aria-hidden="true">{role.icon}</span><span>{role.label}</span>{role.name !== role.label && <span className="run-table-visually-hidden">（{role.name}）</span>}</span>;
+                })}
+              </li>)}</ul>}
               {changedOrder && original && <span className="run-table-order">順番 {original.index + 1} → {index + 1}</span>}
               {!!row.violations.length && <ul className="run-table-warnings">{row.violations.map((violation, warningIndex) => <li key={warningIndex}><AlertCircle size={13} /><span>{violation}</span></li>)}</ul>}
             </td>

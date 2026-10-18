@@ -147,7 +147,12 @@ export function parseIssue(text: string, state: EventState): Issue | null {
 }
 
 function cloneSlots(slots: EventSlot[]): EventSlot[] {
-  return slots.map((slot) => ({ ...slot, people: [...slot.people], equipment: [...slot.equipment] }));
+  return slots.map((slot) => ({
+    ...slot,
+    people: [...slot.people],
+    ...(slot.members ? { members: slot.members.map((member) => ({ ...member, roles: [...member.roles] })) } : {}),
+    equipment: [...slot.equipment],
+  }));
 }
 
 function applyIssue(state: EventState, issue: Issue): { slots: EventSlot[]; changes: string[]; tradeoffs: string[] } {
