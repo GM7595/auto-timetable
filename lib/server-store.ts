@@ -80,6 +80,7 @@ export const eventStateSchema = z.object({
     location: z.string().max(240),
     startTime: minute,
     endTime: minute,
+    defaultChangeoverMinutes: z.number().int().min(0).max(90).optional(),
     quietWindows: z.array(z.object({
       id: identifier,
       label: shortText,

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { GripVertical, Plus, Trash2, UserRound, X } from "lucide-react";
 import type { SlotMember } from "@/lib/types";
 import { getMemberRole, isMemberRoleIcon, MAX_MEMBERS, MAX_MEMBER_NAME_LENGTH, MAX_MEMBER_ROLE_LENGTH, MAX_MEMBER_ROLES, MEMBER_ROLE_PRESETS } from "@/lib/member-roles";
@@ -14,6 +14,9 @@ type MemberDrag = {
   pointerId?: number;
   startX: number;
   startY: number;
+  pointerY: number;
+  grabOffsetY: number;
+  layout: { top: number; height: number }[];
   handle: HTMLButtonElement;
   members: SlotMember[];
   rolesOptional: boolean;
@@ -33,20 +36,90 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
   const tableFrameRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<MemberDrag | null>(null);
   const pendingFocusRef = useRef<number | null>(null);
+  const pendingMotionRef = useRef<number[] | null>(null);
   const [drag, setDrag] = useState<MemberDrag | null>(null);
   const [dragAnnouncement, setDragAnnouncement] = useState("");
   const canAddMember = members.length < MAX_MEMBERS;
-  const incompleteIndex = members.findIndex(member => member.name.trim().length === 0 || (!rolesOptional && member.roles.length === 0));
-  const incompleteMessage = incompleteIndex < 0 ? "" : members[incompleteIndex].name.trim().length === 0 ? `保存するには${incompleteIndex + 1}人目の名前を入力してください。` : `保存するには${incompleteIndex + 1}人目の楽器・役職を選んでください（不要なら「役職なし」をオン）。`;
+  const missingNames = members.some(member => member.name.trim().length === 0);
+  const missingRoles = !rolesOptional && members.some(member => member.roles.length === 0);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (dragRef.current && (dragRef.current.members !== members || dragRef.current.rolesOptional !== rolesOptional)) cancelDrag();
     if (pendingFocusRef.current !== null) {
       handleRefs.current[pendingFocusRef.current]?.focus({ preventScroll: true });
       pendingFocusRef.current = null;
     }
   }, [members, rolesOptional]);
+  useLayoutEffect(() => {
+    const positions = pendingMotionRef.current;
+    if (!positions) return;
+    pendingMotionRef.current = null;
+    for (let index = 0; index < positions.length; index++) {
+      const row = rowRefs.current[index];
+      if (!row || row.ownerDocument.defaultView?.matchMedia?.("(prefers-reduced-motion: reduce)").matches) continue;
+      const offset = positions[index] - row.getBoundingClientRect().top;
+      if (Math.abs(offset) < .5) continue;
+      row.animate?.([{ transform: `translateY(${offset}px)` }, { transform: "translateY(0px)" }], { duration: 190, easing: "cubic-bezier(.2,.8,.2,1)" });
+    }
+  }, [members, drag]);
+  // Closing an expanded palette changes the untransformed row layout. Capture it
+  // once after the palette closes; animated row rectangles never drive hit tests.
+  useLayoutEffect(() => {
+    const current = dragRef.current;
+    if (!current?.active || current.members !== members) return;
+    const layout = measureRows();
+    if (layout.every((row, index) => row.top === current.layout[index]?.top && row.height === current.layout[index]?.height)) return;
+    const next = { ...current, layout };
+    if (next.kind === "pointer") next.target = pointerTarget(next, next.pointerY);
+    dragRef.current = next;
+    setDrag(next);
+  }, [openIndex, emojiTarget, drag?.active]);
+  useLayoutEffect(() => {
+    if (!drag?.active || drag.kind !== "pointer") return;
+    const document = tableFrameRef.current?.ownerDocument;
+    const followScroll = () => {
+      const current = dragRef.current;
+      if (!current?.active || current.kind !== "pointer" || current.members !== members || current.rolesOptional !== rolesOptional) return;
+      const measured = { ...current, layout: measureRows() };
+      updateDrag(measured, pointerTarget(measured, measured.pointerY));
+    };
+    // Scroll does not bubble, so capture ancestor dialog/document scrolling too.
+    document?.addEventListener("scroll", followScroll, { capture: true, passive: true });
+    return () => document?.removeEventListener("scroll", followScroll, true);
+  }, [drag?.active, drag?.kind]);
   useEffect(() => () => { releaseDrag(); }, []);
+
+  function measureRows() {
+    return members.map((_, index) => {
+      const row = rowRefs.current[index];
+      const rect = row?.getBoundingClientRect();
+      // offsetTop/offsetHeight stay stable while CSS transforms move the rows.
+      const top = row?.offsetParent && typeof row.offsetTop === "number" ? row.offsetParent.getBoundingClientRect().top + row.offsetTop : rect?.top ?? 0;
+      return { top, height: row?.offsetHeight || rect?.height || 0 };
+    });
+  }
+
+  function stopRowMotion() {
+    for (const row of rowRefs.current) row?.getAnimations?.().forEach(animation => animation.cancel());
+  }
+
+  function rowOffset(current: MemberDrag, index: number) {
+    const source = current.layout[current.source];
+    const target = current.layout[current.target];
+    if (!source || !target || !current.active) return 0;
+    if (index === current.source) return current.kind === "pointer" ? current.pointerY - current.grabOffsetY - source.top : current.target < current.source ? target.top - source.top : target.top + target.height - source.top - source.height;
+    if (current.source < current.target && index > current.source && index <= current.target) return -source.height;
+    if (current.target < current.source && index >= current.target && index < current.source) return source.height;
+    return 0;
+  }
+
+  function rememberPositions(current: MemberDrag, target = current.source) {
+    if (!current.active) return;
+    const positions = current.members.map((_, index) => rowRefs.current[index]?.getBoundingClientRect().top ?? current.layout[index]?.top ?? 0);
+    const [moved] = positions.splice(current.source, 1);
+    positions.splice(target, 0, moved);
+    pendingMotionRef.current = positions;
+  }
 
   function newMember(): SlotMember {
     return rolesOptional ? { name: "", roles: [], roleNotRequired: true } : { name: "", roles: [] };
@@ -83,6 +156,7 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
   function cancelDrag(restoreFocus = false) {
     const current = releaseDrag();
     if (!current) return;
+    rememberPositions(current);
     setDrag(null);
     setDragAnnouncement("並び替えをキャンセルしました。");
     if (restoreFocus) current.handle.focus({ preventScroll: true });
@@ -92,8 +166,8 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
     return current.members[current.source]?.name.trim() || `メンバー${current.source + 1}`;
   }
 
-  function updateDrag(current: MemberDrag, target: number) {
-    const next = { ...current, active: true, target };
+  function updateDrag(current: MemberDrag, target: number, pointerY = current.pointerY) {
+    const next = { ...current, active: true, target, pointerY };
     dragRef.current = next;
     setDrag(next);
     if (!current.active || current.target !== target) setDragAnnouncement(`${dragName(current)}の移動先は${target + 1}番目です。離すか Enter キーで確定、Escape キーでキャンセルします。`);
@@ -104,6 +178,7 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
     const reordered = members.map(member => copyMember(member));
     const [moved] = reordered.splice(current.source, 1);
     reordered.splice(target, 0, moved);
+    rememberPositions(current, target);
     resetPickers();
     pendingFocusRef.current = target;
     setDragAnnouncement(`${dragName(current)}を${target + 1}番目に移動しました。`);
@@ -115,7 +190,7 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
     let target = 0;
     for (let index = 0; index < members.length; index++) {
       if (index === current.source) continue;
-      const rect = rowRefs.current[index]?.getBoundingClientRect();
+      const rect = current.layout[index];
       if (rect && clientY >= rect.top + rect.height / 2) target++;
     }
     return Math.min(members.length - 1, target);
@@ -124,7 +199,10 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
   function startPointerDrag(event: PointerEvent<HTMLButtonElement>, index: number) {
     if (members.length < 2 || index < 0 || index >= members.length || event.button !== 0 || !event.isPrimary) return;
     cancelDrag();
-    const current: MemberDrag = { source: index, target: index, active: false, kind: "pointer", pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, handle: event.currentTarget, members, rolesOptional };
+    stopRowMotion();
+    pendingMotionRef.current = null;
+    const layout = measureRows();
+    const current: MemberDrag = { source: index, target: index, active: false, kind: "pointer", pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, pointerY: event.clientY, grabOffsetY: event.clientY - layout[index].top, layout, handle: event.currentTarget, members, rolesOptional };
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.focus({ preventScroll: true });
@@ -134,18 +212,20 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
   }
 
   function movePointerDrag(event: PointerEvent<HTMLButtonElement>) {
-    const current = dragRef.current;
-    if (!current || current.kind !== "pointer" || current.pointerId !== event.pointerId) return;
-    if (current.members !== members || current.rolesOptional !== rolesOptional) { cancelDrag(); return; }
+    const captured = dragRef.current;
+    if (!captured || captured.kind !== "pointer" || captured.pointerId !== event.pointerId) return;
+    if (captured.members !== members || captured.rolesOptional !== rolesOptional) { cancelDrag(); return; }
+    const current = { ...captured, layout: measureRows() };
     if (!current.active && Math.hypot(event.clientX - current.startX, event.clientY - current.startY) < 5) return;
     event.preventDefault();
     if (!current.active) resetPickers();
-    updateDrag(current, pointerTarget(current, event.clientY));
+    updateDrag(current, pointerTarget(current, event.clientY), event.clientY);
   }
 
   function endPointerDrag(event: PointerEvent<HTMLButtonElement>) {
-    const current = dragRef.current;
-    if (!current || current.kind !== "pointer" || current.pointerId !== event.pointerId) return;
+    const captured = dragRef.current;
+    if (!captured || captured.kind !== "pointer" || captured.pointerId !== event.pointerId) return;
+    const current = { ...captured, layout: measureRows() };
     const frame = tableFrameRef.current;
     const rect = frame?.getBoundingClientRect();
     const inside = rect && event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
@@ -153,6 +233,7 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
     if (!current.active || !inside || !hit || !frame?.contains(hit)) { cancelDrag(); return; }
     event.preventDefault();
     const target = pointerTarget(current, event.clientY);
+    if (target === current.source) rememberPositions(current);
     releaseDrag();
     setDrag(null);
     moveMember(current, target);
@@ -167,10 +248,13 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
       event.preventDefault(); event.stopPropagation();
       if (event.repeat || members.length < 2) return;
       if (current?.kind === "keyboard" && current.source === index) {
+        if (current.target === current.source) rememberPositions(current);
         releaseDrag(); setDrag(null); moveMember(current, current.target);
       } else {
         cancelDrag(); resetPickers();
-        const next: MemberDrag = { source: index, target: index, active: true, kind: "keyboard", startX: 0, startY: 0, handle: event.currentTarget, members, rolesOptional };
+        stopRowMotion();
+        pendingMotionRef.current = null;
+        const next: MemberDrag = { source: index, target: index, active: true, kind: "keyboard", startX: 0, startY: 0, pointerY: 0, grabOffsetY: 0, layout: measureRows(), handle: event.currentTarget, members, rolesOptional };
         dragRef.current = next;
         setDrag(next);
         setDragAnnouncement(`${dragName(next)}をつかみました。上下矢印キーで移動先を選び、Enter キーで確定します。`);
@@ -261,7 +345,7 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
   }}>
     <legend>メンバー</legend>
     <div className="member-editor-toolbar">
-      <p className="member-editor-hint">{rolesOptional ? "保存には全メンバーの名前が必要です。" : "保存には全メンバーの名前と楽器・役職が必要です。"}</p>
+      <p className="member-editor-hint">{members.length > 1 && <><GripVertical size={13} aria-hidden="true" />ドラッグで並び替え</>}</p>
       <label className="member-role-optional" htmlFor={`${id}-no-roles`}>
         <input id={`${id}-no-roles`} type="checkbox" role="switch" aria-label="全メンバーの役職なし" checked={rolesOptional} onChange={event => {
           cancelDrag();
@@ -273,18 +357,18 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
     </div>
     <p className="visually-hidden" id={`${id}-drag-instructions`}>ドラッグして並び替えます。キーボードでは Space または Enter キーでつかみ、上下矢印キーで移動、Space または Enter キーで確定、Escape キーでキャンセルします。</p>
     <span className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">{dragAnnouncement}</span>
-    {members.length > 0 && <div className="member-editor-table-frame" ref={tableFrameRef}>
+    {members.length > 0 && <div className="member-editor-table-frame" ref={tableFrameRef} data-dragging={drag?.active || undefined}>
       <table className={`member-editor-table${rolesOptional ? " member-editor-table-no-roles" : ""}`}>
         <caption className="visually-hidden">メンバーと楽器・役職</caption>
         <colgroup><col className="member-editor-name-column" />{!rolesOptional && <col />}<col className="member-editor-action-column" /></colgroup>
-        <thead><tr><th scope="col">名前</th>{!rolesOptional && <th scope="col">楽器・役職</th>}<th scope="col"><span className="visually-hidden">操作</span></th></tr></thead>
+        <thead><tr><th scope="col">名前 <span className={`required${missingNames ? " required-missing" : ""}`}>必須</span></th>{!rolesOptional && <th scope="col">楽器・役職 <span className={`required${missingRoles ? " required-missing" : ""}`}>必須</span></th>}<th scope="col"><span className="visually-hidden">操作</span></th></tr></thead>
         <tbody>{members.map((member, index) => <Fragment key={index}>
-        <tr ref={node => { rowRefs.current[index] = node; }} className={`member-editor-row${drag?.active && drag.source === index ? " member-editor-row-dragging" : ""}`} data-drop-position={drag?.active && drag.target !== drag.source && drag.target === index ? drag.target < drag.source ? "before" : "after" : undefined}>
+        <tr ref={node => { rowRefs.current[index] = node; }} className={`member-editor-row${drag?.active && drag.source === index ? " member-editor-row-dragging" : ""}`} style={drag?.active ? { transform: `translateY(${rowOffset(drag, index)}px)` } : undefined} data-drag-kind={drag?.active && drag.source === index ? drag.kind : undefined} data-drop-position={drag?.active && drag.target !== drag.source && drag.target === index ? drag.target < drag.source ? "before" : "after" : undefined}>
           <td><div className="member-editor-name-row">
           <button ref={node => { handleRefs.current[index] = node; }} className="icon-button member-editor-drag-handle" type="button" aria-label={`メンバー${index + 1}をドラッグして並び替え`} title="ドラッグして並び替え" aria-describedby={`${id}-drag-instructions`} aria-pressed={drag?.active && drag.source === index || false} disabled={members.length < 2} onPointerDown={event => startPointerDrag(event, index)} onPointerMove={movePointerDrag} onPointerUp={endPointerDrag} onPointerCancel={event => { if (dragRef.current?.pointerId === event.pointerId) cancelDrag(); }} onLostPointerCapture={event => { if (dragRef.current?.pointerId === event.pointerId) cancelDrag(); }} onBlur={() => { if (dragRef.current?.kind === "keyboard") cancelDrag(); }} onKeyDown={event => keyDrag(event, index)}><GripVertical size={15} aria-hidden="true" /></button>
           <UserRound size={15} aria-hidden="true" />
           <label className="visually-hidden" htmlFor={`${id}-name-${index}`}>メンバー{index + 1}の名前</label>
-          <input id={`${id}-name-${index}`} aria-label={`メンバー${index + 1}の名前`} value={member.name} maxLength={MAX_MEMBER_NAME_LENGTH} placeholder="名前" onChange={event => changeMember(index, { name: event.target.value })} />
+          <input id={`${id}-name-${index}`} aria-label={`メンバー${index + 1}の名前`} required aria-invalid={member.name.trim().length === 0} value={member.name} maxLength={MAX_MEMBER_NAME_LENGTH} placeholder="名前" onChange={event => changeMember(index, { name: event.target.value })} />
           </div></td>
           {!rolesOptional && <td><div className="member-editor-roles">
           {member.roles.map(role => {
@@ -295,7 +379,7 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
             </span>;
             return <button key={role} className="member-role-chip" type="button" aria-label={`${definition.name}${definition.label !== definition.name ? `（${definition.label}）` : ""}を外す`} title={`${definition.name}を外す`} onClick={() => toggleRole(index, role)}><span aria-hidden="true">{definition.icon}</span><span>{definition.label}</span><X size={11} aria-hidden="true" /></button>;
           })}
-          <button type="button" className="member-role-picker-toggle" aria-label={`メンバー${index + 1}の楽器・役職を選ぶ`} aria-expanded={openIndex === index} aria-controls={`${id}-roles-${index}`} onClick={event => {
+          <button type="button" className="member-role-picker-toggle" aria-label={`メンバー${index + 1}の楽器・役職を選ぶ`} aria-invalid={member.roles.length === 0} aria-expanded={openIndex === index} aria-controls={`${id}-roles-${index}`} onClick={event => {
             if (rolesOptional) return;
             triggerRef.current = event.currentTarget;
             setOpenIndex(openIndex === index ? null : index);
@@ -359,7 +443,6 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
       cancelDrag();
       onChange([...members.map(member => copyMember(member)), newMember()]);
     }}><Plus size={14} aria-hidden="true" />メンバーを追加</button>
-    {incompleteIndex >= 0 && <p className="member-role-limit" id={`${id}-incomplete`} aria-live="polite">{incompleteMessage}</p>}
     {members.length >= MAX_MEMBERS && <p className="member-role-limit">メンバーは{MAX_MEMBERS}人までです。</p>}
   </fieldset>;
 }

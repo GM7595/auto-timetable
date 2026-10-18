@@ -6,7 +6,7 @@ const slot = (value: Partial<EventSlot> & Pick<EventSlot, "id" | "title" | "dura
 
 export function createEmptyState(): EventState {
   return {
-    event: { id: "my-event", name: "新しいイベント", date: "2026-11-14", location: "", startTime: 14 * 60, endTime: 17 * 60 + 30, quietWindows: [] },
+    event: { id: "my-event", name: "新しいイベント", date: "2026-11-14", location: "", startTime: 14 * 60, endTime: 17 * 60 + 30, defaultChangeoverMinutes: 5, quietWindows: [] },
     slots: [], history: [], revision: 0,
   };
 }
@@ -14,6 +14,7 @@ export function createEmptyState(): EventState {
 export const demoState: EventState = {
   event: {
     id: "community-day-2026", name: "Community Day 2026", date: "2026-11-14", location: "Shibuya Community Hall", startTime: 14 * 60, endTime: 17 * 60 + 30,
+    defaultChangeoverMinutes: 5,
     quietWindows: [{ id: "quiet-afternoon", label: "会場の音止め", start: 15 * 60 + 30, end: 15 * 60 + 40 }],
   },
   slots: [

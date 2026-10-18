@@ -22,16 +22,17 @@ type EventDeliveryStatus = { activeSubscriptions: number; pendingDeliveries: num
 type EventSummary = { id: string; name: string; date: string; location: string; startTime: number; endTime: number; slotCount: number; updatedAt: string };
 const STORAGE_KEY = "cue.event.v1";
 const KIND: Record<EventSlot["kind"], { label: string }> = {
-  talk: { label: "トーク" },
-  workshop: { label: "ワークショップ" },
-  live: { label: "ライブ" },
-  break: { label: "休憩" },
-  other: { label: "その他" },
+  talk: { label: "演目" },
+  workshop: { label: "演目" },
+  live: { label: "演目" },
+  break: { label: "転換・その他" },
+  other: { label: "転換・その他" },
 };
 const uid = () => crypto.randomUUID();
 const timeLabel = (at: string) => new Date(at).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Tokyo" });
 const dateLabel = (date: string) => new Date(`${date}T00:00:00+09:00`).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric", weekday: "short", timeZone: "Asia/Tokyo" });
 const peopleList = (text: string) => text.split(/[,、\n]/).map(x => x.trim()).filter(Boolean);
+const validMinutes = (value: string, minimum: number, maximum: number) => value.trim() !== "" && Number.isInteger(Number(value)) && Number(value) >= minimum && Number(value) <= maximum;
 function historyItem(title: string, detail: string, kind: HistoryEntry["kind"] = "edit"): HistoryEntry {
   return { id: uid(), at: new Date().toISOString(), title, detail, kind };
 }
@@ -58,13 +59,18 @@ function Dialog({ title, subtitle, onClose, children }: { title: string; subtitl
   return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}><div ref={ref} className="modal" role="dialog" aria-modal="true" aria-label={title}><header className="modal-heading"><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div><button className="icon-button" onClick={onClose} aria-label="閉じる"><X size={20} /></button></header>{children}</div></div>;
 }
 
-function SlotForm({ slot, currentStart, onSave, onClose, onDelete }: { slot: EventSlot | null; currentStart?: number; onSave: (slot: EventSlot) => void; onClose: () => void; onDelete?: () => void }) {
+function SlotForm({ slot, currentStart, defaultChangeoverMinutes = 5, onSave, onClose, onDelete }: { slot: EventSlot | null; currentStart?: number; defaultChangeoverMinutes?: number; onSave: (slot: EventSlot) => void; onClose: () => void; onDelete?: () => void }) {
   const [error, setError] = useState(""), [members, setMembers] = useState<SlotMember[]>(() => {
     return getSlotMembers(slot ?? { people: [] });
   });
   const [rolesOptional, setRolesOptional] = useState(() => members.length > 0 && members.every(member => member.roleNotRequired === true));
+  const [titleValue, setTitleValue] = useState(slot?.title ?? "");
+  const [groupValue, setGroupValue] = useState(slot?.group ?? "");
+  const [durationValue, setDurationValue] = useState(String(slot?.durationMinutes ?? 20));
+  const [changeoverValue, setChangeoverValue] = useState(String(slot?.changeoverMinutes ?? defaultChangeoverMinutes));
+  const missingTitle = !titleValue.trim(), missingGroup = !groupValue.trim();
+  const invalidDuration = !validMinutes(durationValue, 1, 240), invalidChangeover = !validMinutes(changeoverValue, 0, 90);
   const incompleteMemberIndex = members.findIndex(member => !member.name.trim() || (!rolesOptional && !member.roles.some(role => role.trim())));
-  const incompleteMemberMessage = incompleteMemberIndex < 0 ? "" : !members[incompleteMemberIndex].name.trim() ? `${incompleteMemberIndex + 1}人目の名前を入力してください。` : `${incompleteMemberIndex + 1}人目の楽器・役職を選んでください。`;
   return <Dialog title={slot ? "進行枠を編集" : "進行枠を追加"} subtitle="出演者・所要時間・準備条件をまとめて管理します。" onClose={onClose}>
     <form onSubmit={e => {
       e.preventDefault(); const data = new FormData(e.currentTarget);
@@ -72,6 +78,11 @@ function SlotForm({ slot, currentStart, onSave, onClose, onDelete }: { slot: Eve
       if (earliest && latest && parseTime(earliest) >= parseTime(latest)) { setError("出演可能時間の終了は開始より後にしてください。"); return; }
       const title = String(data.get("title") || "").trim();
       if (!title) { setError("タイトルを入力してください。"); return; }
+      const group = String(data.get("group") || "").trim();
+      if (!group) { setError("アーティスト・グループ名を入力してください。"); return; }
+      const duration = String(data.get("duration") ?? ""), changeover = String(data.get("changeover") ?? "");
+      if (!validMinutes(duration, 1, 240)) { setError("本編時間は1〜240分の整数で入力してください。"); return; }
+      if (!validMinutes(changeover, 0, 90)) { setError("準備・転換は0〜90分の整数で入力してください。"); return; }
       // The switch applies to this entire member table. Per-member flags remain
       // the storage format so old events and saved proposals stay compatible.
       const cleanedMembers = members.map(member => {
@@ -84,49 +95,57 @@ function SlotForm({ slot, currentStart, onSave, onClose, onDelete }: { slot: Eve
       if (cleanedMembers.length > 30 || cleanedMembers.some(member => member.name.length > 160 || member.roles.length > 12 || member.roles.some(role => role.length > 40))) { setError("メンバーは30人まで、担当は1人12件・各40文字までにしてください。"); return; }
       if (new Set(cleanedMembers.map(member => member.name)).size !== cleanedMembers.length) { setError("同じ名前のメンバーが重複しています。複数の担当は1人にまとめて設定してください。"); return; }
       const locked = data.get("locked") === "on";
-      onSave({ id: slot?.id ?? uid(), title, group: String(data.get("group") || "").trim(), kind: String(data.get("kind")) as EventSlot["kind"], durationMinutes: Number(data.get("duration")), changeoverMinutes: Number(data.get("changeover")), people: cleanedMembers.map(member => member.name), members: cleanedMembers, equipment: peopleList(String(data.get("equipment") || "")), earliestStart: earliest ? parseTime(earliest) : undefined, latestEnd: latest ? parseTime(latest) : undefined, fixedStart: slot?.status === "done" || slot?.status === "active" ? slot.fixedStart ?? currentStart : locked ? slot?.fixedStart ?? currentStart : undefined, locked, status: slot?.status ?? "planned", energy: Number(data.get("energy")), notes: String(data.get("notes") || "").trim() });
+      // Keep legacy category details on unchanged rows while presenting only
+      // the two useful choices. New support rows share the silent-break rules.
+      const support = slot?.kind === "break" || slot?.kind === "other";
+      const kind: EventSlot["kind"] = data.get("kind") === "support" ? support ? slot.kind : "break" : slot && !support ? slot.kind : "talk";
+      onSave({ id: slot?.id ?? uid(), title, group, kind, durationMinutes: Number(duration), changeoverMinutes: Number(changeover), people: cleanedMembers.map(member => member.name), members: cleanedMembers, equipment: peopleList(String(data.get("equipment") || "")), earliestStart: earliest ? parseTime(earliest) : undefined, latestEnd: latest ? parseTime(latest) : undefined, fixedStart: slot?.status === "done" || slot?.status === "active" ? slot.fixedStart ?? currentStart : locked ? slot?.fixedStart ?? currentStart : undefined, locked, status: slot?.status ?? "planned", energy: slot?.energy ?? 3, notes: String(data.get("notes") || "").trim() });
     }}>
       <div className="form-body">
-        <label className="field">タイトル <span className="required">必須</span><input name="title" placeholder="例：プロダクトデモ＆トーク" maxLength={160} required defaultValue={slot?.title} /></label>
-        <label className="field">出演者・グループ名<input name="group" placeholder="例：チーム Horizon" maxLength={160} defaultValue={slot?.group} /></label>
-        <MemberEditor members={members} onChange={setMembers} rolesOptional={rolesOptional} onRolesOptionalChange={optional => {
+        <label className={`field${missingTitle ? " field-missing" : ""}`}>タイトル <span className="required">必須</span><input name="title" placeholder="例：プロダクトデモ＆トーク" maxLength={160} required aria-invalid={missingTitle} value={titleValue} onChange={e => { setTitleValue(e.target.value); setError(""); }} /></label>
+        <label className={`field${missingGroup ? " field-missing" : ""}`}>アーティスト・グループ名<span className="required">必須</span><input name="group" placeholder="例：チーム Horizon" maxLength={160} required aria-invalid={missingGroup} value={groupValue} onChange={e => { setGroupValue(e.target.value); setError(""); }} /></label>
+        <MemberEditor members={members} onChange={next => { setMembers(next); setError(""); }} rolesOptional={rolesOptional} onRolesOptionalChange={optional => {
+          setError("");
           setRolesOptional(optional);
           setMembers(members.map(member => {
             const { roleIcons, ...rest } = member;
             return { ...rest, roles: optional ? [] : [...member.roles], ...(!optional && roleIcons ? { roleIcons: { ...roleIcons } } : {}), roleNotRequired: optional ? true : undefined };
           }));
         }} />
-        <div className="form-grid"><label className="field">本編の時間<div className="input-unit"><input type="number" min="1" max="240" name="duration" defaultValue={slot?.durationMinutes ?? 20} required /><span>分</span></div></label><label className="field">この枠の前の準備・転換<div className="input-unit"><input type="number" min="0" max="90" name="changeover" defaultValue={slot?.changeoverMinutes ?? 5} required /><span>分</span></div></label></div>
+        <div className="form-grid"><label className={`field${invalidDuration ? " field-missing" : ""}`}>本編時間<span className="required">必須</span><div className="input-unit"><input type="number" min="1" max="240" step="1" name="duration" value={durationValue} onChange={e => { setDurationValue(e.target.value); setError(""); }} required aria-invalid={invalidDuration} /><span>分</span></div></label><label className="field">この枠の前の準備・転換<div className="input-unit"><input type="number" min="0" max="90" step="1" name="changeover" value={changeoverValue} onChange={e => { setChangeoverValue(e.target.value); setError(""); }} required aria-invalid={invalidChangeover} /><span>分</span></div></label></div>
         <details className="advanced-fields"><summary>機材・詳細条件{slot?.locked ? "（時刻固定）" : ""}</summary><div className="advanced-fields-body">
-        <label className="field">カテゴリー<select name="kind" defaultValue={slot?.kind ?? "talk"}>{Object.entries(KIND).map(([key, value]) => <option key={key} value={key}>{value.label}</option>)}</select></label>
+        <label className="field">カテゴリー<select name="kind" defaultValue={slot?.kind === "break" || slot?.kind === "other" ? "support" : "program"}><option value="program">演目</option><option value="support">転換・その他</option></select></label>
         <label className="field">必要な設備・機材<input name="equipment" placeholder="例：マイク、プロジェクター" defaultValue={slot?.equipment.join("、")} maxLength={1000} /></label>
         <div className="field-section"><span>出演可能時間 <small>指定がない場合は空欄</small></span><div className="form-grid"><label className="field">この時刻以降<input type="time" name="earliest" defaultValue={slot?.earliestStart === undefined ? "" : formatTime(slot.earliestStart)} /></label><label className="field">この時刻までに終了<input type="time" name="latest" defaultValue={slot?.latestEnd === undefined ? "" : formatTime(slot.latestEnd)} /></label></div></div>
-        <label className="field">雰囲気・エネルギー<select name="energy" defaultValue={slot?.energy ?? 3}><option value="1">1 — 落ち着いて聴く</option><option value="2">2 — ゆったり楽しむ</option><option value="3">3 — バランスよく</option><option value="4">4 — 活気をつくる</option><option value="5">5 — 会場を盛り上げる</option></select></label>
         <label className="field">メモ<textarea name="notes" rows={2} placeholder="出演条件や、進行上の希望など" defaultValue={slot?.notes} maxLength={2000} /></label>
         <label className="checkbox-field"><input type="checkbox" name="locked" defaultChecked={slot?.locked} /><LockKeyhole size={15} />出演時刻を固定する</label>
         </div></details>
         {error && <p className="form-error" role="alert">{error}</p>}
       </div>
-      <footer className="modal-footer"><div>{slot && onDelete && slot.status === "planned" && <button type="button" className="danger-link" onClick={onDelete}><Trash2 size={15} />この枠を削除</button>}</div><div><button type="button" className="button secondary" onClick={onClose}>キャンセル</button><button className="button primary" type="submit" disabled={incompleteMemberIndex >= 0} title={incompleteMemberMessage || undefined}><Check size={16} />{slot ? "変更を保存" : "追加する"}</button></div></footer>
+      <footer className="modal-footer"><div>{slot && onDelete && slot.status === "planned" && <button type="button" className="danger-link" onClick={onDelete}><Trash2 size={15} />この枠を削除</button>}</div><div><button type="button" className="button secondary" onClick={onClose}>キャンセル</button><button className="button primary" type="submit" disabled={missingTitle || missingGroup || invalidDuration || invalidChangeover || incompleteMemberIndex >= 0}><Check size={16} />{slot ? "変更を保存" : "追加する"}</button></div></footer>
     </form>
   </Dialog>;
 }
 
 function EventForm({ state, onSave, onClose }: { state: EventState; onSave: (state: EventState) => void; onClose: () => void }) {
   const [quiet, setQuiet] = useState(state.event.quietWindows), [error, setError] = useState("");
+  const [defaultChangeover, setDefaultChangeover] = useState(String(state.event.defaultChangeoverMinutes ?? 5));
   return <Dialog title="イベント設定" subtitle="開催時間と、進行を組むための基本条件。" onClose={onClose}>
     <form onSubmit={e => {
       e.preventDefault(); const data = new FormData(e.currentTarget), startTime = parseTime(String(data.get("start"))), endTime = parseTime(String(data.get("end")));
       if (endTime <= startTime) { setError("終了時刻は開始より後にしてください。同日開催に対応しています。"); return; }
       if (quiet.some(q => q.end <= q.start || q.start < startTime || q.end > endTime)) { setError("音出し不可時間は開催時間内に指定してください。"); return; }
-      onSave({ ...state, event: { ...state.event, name: String(data.get("name")).trim(), date: String(data.get("date")), location: String(data.get("location")).trim(), startTime, endTime, quietWindows: quiet } });
+      const changeover = String(data.get("defaultChangeover") ?? "");
+      if (!validMinutes(changeover, 0, 90)) { setError("転換時間のデフォルトは0〜90分の整数で入力してください。"); return; }
+      onSave({ ...state, event: { ...state.event, name: String(data.get("name")).trim(), date: String(data.get("date")), location: String(data.get("location")).trim(), startTime, endTime, defaultChangeoverMinutes: Number(changeover), quietWindows: quiet } });
     }}><div className="form-body">
       <label className="field">イベント名<input name="name" defaultValue={state.event.name} required maxLength={160} /></label>
       <div className="form-grid"><label className="field">開催日<input name="date" type="date" defaultValue={state.event.date} required /></label><label className="field">会場<input name="location" defaultValue={state.event.location} placeholder="会場名" maxLength={160} /></label></div>
       <div className="form-grid"><label className="field">開始時刻<input name="start" type="time" defaultValue={formatTime(state.event.startTime)} required /></label><label className="field">音止め・終了時刻<input name="end" type="time" defaultValue={formatTime(state.event.endTime)} required /></label></div>
+      <label className="field">転換時間のデフォルト<div className="input-unit"><input name="defaultChangeover" type="number" min="0" max="90" step="1" required value={defaultChangeover} aria-invalid={!validMinutes(defaultChangeover, 0, 90)} onChange={e => { setDefaultChangeover(e.target.value); setError(""); }} /><span>分</span></div><span className="field-hint field-hint-inline">新しく追加する枠に使います。登録済みの枠は変わりません。</span></label>
       <div className="field-section"><div className="section-line"><span>音出し不可時間</span><button className="text-button" type="button" onClick={() => setQuiet([...quiet, { id: uid(), label: "音出し不可", start: state.event.startTime + 60, end: state.event.startTime + 70 }])}><Plus size={14} />追加</button></div><p className="field-hint">この時間を避けて本編を配置します。</p>{quiet.map((q, i) => <div className="quiet-editor" key={q.id}><input aria-label={`音出し不可${i + 1}の名称`} value={q.label} onChange={e => setQuiet(quiet.map(x => x.id === q.id ? { ...x, label: e.target.value } : x))} maxLength={80} /><input aria-label={`音出し不可${i + 1}の開始`} type="time" value={formatTime(q.start)} onChange={e => setQuiet(quiet.map(x => x.id === q.id ? { ...x, start: parseTime(e.target.value) } : x))} required /><span>–</span><input aria-label={`音出し不可${i + 1}の終了`} type="time" value={formatTime(q.end)} onChange={e => setQuiet(quiet.map(x => x.id === q.id ? { ...x, end: parseTime(e.target.value) } : x))} required /><button type="button" className="icon-button" aria-label="音出し不可時間を削除" onClick={() => setQuiet(quiet.filter(x => x.id !== q.id))}><X size={16} /></button></div>)}</div>
       {error && <p className="form-error" role="alert">{error}</p>}
-    </div><footer className="modal-footer"><span /><div><button className="button secondary" type="button" onClick={onClose}>キャンセル</button><button className="button primary" type="submit"><Check size={16} />設定を保存</button></div></footer></form>
+    </div><footer className="modal-footer"><span /><div><button className="button secondary" type="button" onClick={onClose}>キャンセル</button><button className="button primary" type="submit" disabled={!validMinutes(defaultChangeover, 0, 90)}><Check size={16} />設定を保存</button></div></footer></form>
   </Dialog>;
 }
 
@@ -537,7 +556,7 @@ export default function Home() {
         {!!state.slots.length && <footer className="schedule-summary"><span>終了予定 <strong>{formatTime(visibleSchedule.endsAt)}</strong></span><span className={visibleSchedule.bufferMinutes < 0 ? "text-red" : ""}>{visibleSchedule.bufferMinutes >= 0 ? "終了時刻まで " + visibleSchedule.bufferMinutes + "分の余裕" : -visibleSchedule.bufferMinutes + "分超過"}</span></footer>}
       </section>
     </main>
-    {slotEditor !== null && <SlotForm slot={slotEditor === "new" ? null : slotEditor} currentStart={slotEditor === "new" ? undefined : schedule.rows.find(slot => slot.id === slotEditor.id)?.start} onClose={() => setSlotEditor(null)} onSave={saveSlot} onDelete={slotEditor !== "new" ? () => { const current = stateRef.current; commit({ ...current, slots: current.slots.filter(slot => slot.id !== slotEditor.id) }, historyItem("進行枠を削除", slotEditor.title)); setSlotEditor(null); notify("進行枠を削除しました。"); } : undefined} />}
+    {slotEditor !== null && <SlotForm slot={slotEditor === "new" ? null : slotEditor} currentStart={slotEditor === "new" ? undefined : schedule.rows.find(slot => slot.id === slotEditor.id)?.start} defaultChangeoverMinutes={state.event.defaultChangeoverMinutes ?? 5} onClose={() => setSlotEditor(null)} onSave={saveSlot} onDelete={slotEditor !== "new" ? () => { const current = stateRef.current; commit({ ...current, slots: current.slots.filter(slot => slot.id !== slotEditor.id) }, historyItem("進行枠を削除", slotEditor.title)); setSlotEditor(null); notify("進行枠を削除しました。"); } : undefined} />}
     {settingsOpen && <EventForm state={state} onClose={() => setSettingsOpen(false)} onSave={next => { commit(next, historyItem("イベント設定を更新", next.event.name + " · " + formatTime(next.event.startTime) + "–" + formatTime(next.event.endTime))); setSettingsOpen(false); notify("イベント設定を更新しました。"); }} />}
     {panel === "history" && <Dialog title="変更履歴" onClose={() => setPanel(null)}><div className="history-list">{state.history.length ? state.history.map(entry => <article key={entry.id}><h3>{entry.title}</h3><time>{new Date(entry.at).toLocaleDateString("ja-JP")} {timeLabel(entry.at)}</time><p>{entry.detail}</p></article>) : <p>まだ変更はありません。</p>}</div></Dialog>}
     {panel === "connections" && <Dialog title="連携・保存" onClose={() => setPanel(null)}><div className="connection-settings">

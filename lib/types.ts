@@ -48,6 +48,8 @@ export interface EventState {
     location: string;
     startTime: number;
     endTime: number;
+    /** Initial preparation time for new slots only. Legacy events use 5. */
+    defaultChangeoverMinutes?: number;
     quietWindows: { id: string; label: string; start: number; end: number }[];
   };
   slots: EventSlot[];

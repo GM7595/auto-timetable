@@ -198,7 +198,9 @@ input,select,textarea { min-width:0; }
 .field textarea { min-height:76px; resize:vertical; }
 .field input::placeholder,.field textarea::placeholder { color:var(--placeholder); opacity:1; }
 .field input:focus,.field select:focus,.field textarea:focus,.quiet-editor input:focus { border-color:var(--focus); }
-.required { margin-left:5px; color:var(--danger); font-size:11px; }
+.required { margin-left:5px; color:var(--secondary); font-size:11px; }
+.field-missing .required,.required-missing { color:var(--danger); }
+.field input[aria-invalid="true"],.field input[aria-invalid="true"]:focus { border-color:var(--danger); }
 .input-unit { position:relative; }
 .input-unit input { padding-right:32px; }
 .input-unit>span { position:absolute; right:11px; top:10px; color:var(--secondary); font-size:12px; }
@@ -207,6 +209,7 @@ input,select,textarea { min-width:0; }
 .field-section small { margin-left:7px; color:var(--secondary); font-size:12px; }
 .section-line { display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .field-hint { margin-top:5px; margin-bottom:11px; color:var(--secondary); font-size:12px; }
+.field-hint-inline { display:block; margin-bottom:0; }
 .quiet-editor { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) auto minmax(0,1fr) 27px; align-items:center; gap:7px; margin-top:10px; }
 .quiet-editor input { margin:0; padding:7px; font-size:13px; }
 .quiet-editor>span { color:var(--secondary); }
@@ -383,8 +386,8 @@ input,select,textarea { min-width:0; }
 .member-editor { min-width:0; margin:0; padding:0; border:0; }
 .member-editor legend { padding:0; color:var(--label); font-size:13px; font-weight:500; }
 .member-editor-toolbar { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:5px 12px; margin:4px 0 10px; }
-.member-editor-hint { flex:1 1 200px; margin:0; color:var(--secondary); font-size:12px; }
-.member-editor-table-frame { margin:0 0 11px; border:1px solid var(--border); border-radius:5px; }
+.member-editor-hint { display:flex; align-items:center; gap:4px; flex:1 1 200px; margin:0; color:var(--secondary); font-size:12px; }
+.member-editor-table-frame { position:relative; isolation:isolate; margin:0 0 11px; border:1px solid var(--border); border-radius:5px; }
 .member-editor-table { width:100%; table-layout:fixed; border-collapse:collapse; font-size:12px; }
 .member-editor-table .member-editor-name-column { width:42%; }
 .member-editor-table .member-editor-action-column { width:42px; }
@@ -394,8 +397,13 @@ input,select,textarea { min-width:0; }
 .member-editor-table th:last-child { border-top-right-radius:5px; }
 .member-editor-table td { min-width:0; padding:8px 9px; border-top:1px solid var(--border); vertical-align:middle; }
 .member-editor-table td.member-editor-action-cell { padding-right:7px; padding-left:3px; text-align:center; }
-.member-editor-row { min-width:0; }
-.member-editor-row-dragging>td { background:var(--surface-selected); }
+.member-editor-row { position:relative; z-index:0; min-width:0; }
+.member-editor-table-frame[data-dragging="true"] .member-editor-row { transition:transform 190ms cubic-bezier(.2,.8,.2,1); will-change:transform; }
+.member-editor-row.member-editor-row-dragging { z-index:2; outline:1px solid var(--accent-selected-border); outline-offset:-1px; filter:drop-shadow(0 7px 8px #0003); }
+.member-editor-table-frame[data-dragging="true"] .member-editor-row[data-drag-kind="pointer"] { transition:none; }
+.member-editor-row-dragging>td { background:var(--surface-selected); border-top-color:var(--accent-selected-border); }
+.member-editor-row-dragging>td:first-child { border-radius:5px 0 0 5px; }
+.member-editor-row-dragging>td:last-child { border-radius:0 5px 5px 0; }
 .member-editor-row[data-drop-position="before"]>td { box-shadow:inset 0 2px 0 var(--primary); }
 .member-editor-row[data-drop-position="after"]>td { box-shadow:inset 0 -2px 0 var(--primary); }
 .member-editor-name-row { display:flex; align-items:center; gap:8px; color:var(--secondary); }
@@ -405,6 +413,7 @@ input,select,textarea { min-width:0; }
 .member-editor-drag-handle:disabled { opacity:.3; cursor:default; }
 .member-editor-name-row>input,.member-role-custom>input { flex:1; width:100%; min-width:0; min-height:36px; padding:6px 9px; color:var(--foreground); background:var(--surface); border:1px solid var(--control-border); border-radius:4px; font-size:13px; }
 .member-editor-name-row>input:focus,.member-role-custom>input:focus { border-color:var(--focus); }
+.member-editor-name-row>input[aria-invalid="true"],.member-editor-name-row>input[aria-invalid="true"]:focus { border-color:var(--danger); }
 .member-editor-name-row>input::placeholder,.member-role-custom>input::placeholder { color:var(--placeholder); opacity:1; }
 .member-editor-remove { width:29px; height:32px; }
 .member-editor-remove:hover { color:var(--danger); background:var(--danger-background); }
@@ -427,6 +436,7 @@ input,select,textarea { min-width:0; }
 .member-role-chip-emoji:hover,.member-role-chip-emoji[aria-expanded="true"],.member-role-chip-remove:hover { background:var(--surface-hover); }
 .member-role-picker-toggle { display:inline-flex; align-items:center; gap:3px; min-height:28px; padding:3px 6px; color:var(--secondary); background:transparent; border:1px dashed var(--control-border); border-radius:4px; font-size:12px; }
 .member-role-picker-toggle:hover,.member-role-picker-toggle[aria-expanded="true"] { color:var(--accent-text); border-color:var(--accent-selected-border); }
+.member-role-picker-toggle[aria-invalid="true"],.member-role-picker-toggle[aria-invalid="true"]:hover,.member-role-picker-toggle[aria-invalid="true"][aria-expanded="true"] { border-color:var(--danger); }
 .member-editor-table .member-editor-picker-row>td { padding:0 9px 9px; border-top:0; }
 .member-role-picker { margin:0; padding:10px; background:var(--surface); border:1px solid var(--border); border-radius:5px; }
 .member-role-presets { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:6px; }
@@ -450,6 +460,9 @@ input,select,textarea { min-width:0; }
 .member-role-emoji-manual>input[aria-invalid="true"] { border-color:var(--danger); }
 .member-editor-add { min-height:28px; }
 .member-role-limit { margin:7px 0 0; color:var(--secondary); font-size:11px; }
+@media (prefers-reduced-motion:reduce) {
+  .member-editor-table-frame[data-dragging="true"] .member-editor-row { transition:none; }
+}
 @media (max-width:760px) {
   .member-editor-name-row>input,.member-role-custom>input,.member-role-emoji-manual>input { min-height:38px; font-size:16px; }
   .member-editor-table .member-editor-action-column { width:34px; }
