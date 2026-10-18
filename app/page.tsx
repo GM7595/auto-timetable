@@ -60,10 +60,11 @@ function Dialog({ title, subtitle, onClose, children }: { title: string; subtitl
 
 function SlotForm({ slot, currentStart, onSave, onClose, onDelete }: { slot: EventSlot | null; currentStart?: number; onSave: (slot: EventSlot) => void; onClose: () => void; onDelete?: () => void }) {
   const [error, setError] = useState(""), [members, setMembers] = useState<SlotMember[]>(() => {
-    const existing = getSlotMembers(slot ?? { people: [] });
-    return existing.length ? existing : [{ name: "", roles: [] }];
+    return getSlotMembers(slot ?? { people: [] });
   });
   const [rolesOptional, setRolesOptional] = useState(() => members.length > 0 && members.every(member => member.roleNotRequired === true));
+  const incompleteMemberIndex = members.findIndex(member => !member.name.trim() || (!rolesOptional && !member.roles.some(role => role.trim())));
+  const incompleteMemberMessage = incompleteMemberIndex < 0 ? "" : !members[incompleteMemberIndex].name.trim() ? `${incompleteMemberIndex + 1}人目の名前を入力してください。` : `${incompleteMemberIndex + 1}人目の楽器・役職を選んでください。`;
   return <Dialog title={slot ? "進行枠を編集" : "進行枠を追加"} subtitle="出演者・所要時間・準備条件をまとめて管理します。" onClose={onClose}>
     <form onSubmit={e => {
       e.preventDefault(); const data = new FormData(e.currentTarget);
@@ -73,12 +74,12 @@ function SlotForm({ slot, currentStart, onSave, onClose, onDelete }: { slot: Eve
       if (!title) { setError("タイトルを入力してください。"); return; }
       // The switch applies to this entire member table. Per-member flags remain
       // the storage format so old events and saved proposals stay compatible.
-      const cleanedMembers = members.filter(member => member.name.trim() || member.roles.some(role => role.trim())).map(member => {
+      const cleanedMembers = members.map(member => {
         const roles = rolesOptional ? [] : [...new Set(member.roles.map(role => role.trim()).filter(Boolean))];
         const roleIcons = Object.fromEntries(Object.entries(member.roleIcons ?? {}).filter(([role, icon]) => roles.includes(role.trim()) && isMemberRoleIcon(icon.trim())).map(([role, icon]) => [role.trim(), icon.trim()]));
         return { name: member.name.trim(), roles, ...(Object.keys(roleIcons).length ? { roleIcons } : {}), ...(rolesOptional ? { roleNotRequired: true } : {}) };
       });
-      if (cleanedMembers.some(member => !member.name)) { setError("担当を設定したメンバーの名前を入力してください。"); return; }
+      if (cleanedMembers.some(member => !member.name)) { setError("メンバーの名前を入力してください。不要な行は削除してください。"); return; }
       if (cleanedMembers.some(member => !member.roles.length && !member.roleNotRequired)) { setError("名前と楽器・役職の両方を入力してください。役職が不要なら「役職なし」を選んでください。"); return; }
       if (cleanedMembers.length > 30 || cleanedMembers.some(member => member.name.length > 160 || member.roles.length > 12 || member.roles.some(role => role.length > 40))) { setError("メンバーは30人まで、担当は1人12件・各40文字までにしてください。"); return; }
       if (new Set(cleanedMembers.map(member => member.name)).size !== cleanedMembers.length) { setError("同じ名前のメンバーが重複しています。複数の担当は1人にまとめて設定してください。"); return; }
@@ -106,7 +107,7 @@ function SlotForm({ slot, currentStart, onSave, onClose, onDelete }: { slot: Eve
         </div></details>
         {error && <p className="form-error" role="alert">{error}</p>}
       </div>
-      <footer className="modal-footer"><div>{slot && onDelete && slot.status === "planned" && <button type="button" className="danger-link" onClick={onDelete}><Trash2 size={15} />この枠を削除</button>}</div><div><button type="button" className="button secondary" onClick={onClose}>キャンセル</button><button className="button primary" type="submit"><Check size={16} />{slot ? "変更を保存" : "追加する"}</button></div></footer>
+      <footer className="modal-footer"><div>{slot && onDelete && slot.status === "planned" && <button type="button" className="danger-link" onClick={onDelete}><Trash2 size={15} />この枠を削除</button>}</div><div><button type="button" className="button secondary" onClick={onClose}>キャンセル</button><button className="button primary" type="submit" disabled={incompleteMemberIndex >= 0} title={incompleteMemberMessage || undefined}><Check size={16} />{slot ? "変更を保存" : "追加する"}</button></div></footer>
     </form>
   </Dialog>;
 }

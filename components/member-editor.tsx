@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useId, useRef, useState } from "react";
-import { Plus, Trash2, UserRound, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Plus, Trash2, UserRound, X } from "lucide-react";
 import type { SlotMember } from "@/lib/types";
 import { getMemberRole, isMemberRoleIcon, MAX_MEMBERS, MAX_MEMBER_NAME_LENGTH, MAX_MEMBER_ROLE_LENGTH, MAX_MEMBER_ROLES, MEMBER_ROLE_PRESETS } from "@/lib/member-roles";
 
@@ -23,9 +23,9 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
   const [manualEmoji, setManualEmoji] = useState("");
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const emojiTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const canAddMember = members.length < MAX_MEMBERS && members.every(member => member.name.trim().length > 0 && (rolesOptional || member.roles.length > 0));
+  const canAddMember = members.length < MAX_MEMBERS;
   const incompleteIndex = members.findIndex(member => member.name.trim().length === 0 || (!rolesOptional && member.roles.length === 0));
-  const incompleteMessage = incompleteIndex < 0 ? "" : members[incompleteIndex].name.trim().length === 0 ? `${incompleteIndex + 1}人目の名前を入力してください。` : `${incompleteIndex + 1}人目の楽器・役職を選んでください（不要なら「役職なし」をオン）。`;
+  const incompleteMessage = incompleteIndex < 0 ? "" : members[incompleteIndex].name.trim().length === 0 ? `保存するには${incompleteIndex + 1}人目の名前を入力してください。` : `保存するには${incompleteIndex + 1}人目の楽器・役職を選んでください（不要なら「役職なし」をオン）。`;
 
   function newMember(): SlotMember {
     return rolesOptional ? { name: "", roles: [], roleNotRequired: true } : { name: "", roles: [] };
@@ -41,6 +41,23 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
 
   function changeMember(index: number, change: Partial<SlotMember>) {
     onChange(members.map((member, memberIndex) => copyMember(member, memberIndex === index ? change : {})));
+  }
+
+  function resetPickers() {
+    setOpenIndex(null);
+    setCustomRole("");
+    setCustomEmoji("🏷️");
+    setEmojiTarget(null);
+    setManualEmoji("");
+  }
+
+  function moveMember(index: number, direction: -1 | 1) {
+    const target = index + direction;
+    if (index < 0 || index >= members.length || target < 0 || target >= members.length) return;
+    const reordered = members.map(member => copyMember(member));
+    [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+    resetPickers();
+    onChange(reordered);
   }
 
   function toggleRole(index: number, role: string) {
@@ -109,11 +126,7 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
   }
 
   function closePicker() {
-    setOpenIndex(null);
-    setCustomRole("");
-    setCustomEmoji("🏷️");
-    setEmojiTarget(null);
-    setManualEmoji("");
+    resetPickers();
     triggerRef.current?.focus();
   }
 
@@ -124,14 +137,10 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
   }}>
     <legend>メンバー</legend>
     <div className="member-editor-toolbar">
-      <p className="member-editor-hint">{rolesOptional ? "名前を入力すると、次のメンバーを追加できます。" : "名前と楽器・役職を入力すると、次のメンバーを追加できます。"}</p>
+      <p className="member-editor-hint">{rolesOptional ? "保存には全メンバーの名前が必要です。" : "保存には全メンバーの名前と楽器・役職が必要です。"}</p>
       <label className="member-role-optional" htmlFor={`${id}-no-roles`}>
         <input id={`${id}-no-roles`} type="checkbox" role="switch" aria-label="全メンバーの役職なし" checked={rolesOptional} onChange={event => {
-          setOpenIndex(null);
-          setCustomRole("");
-          setCustomEmoji("🏷️");
-          setEmojiTarget(null);
-          setManualEmoji("");
+          resetPickers();
           onRolesOptionalChange(event.target.checked);
         }} />
         <span>役職なし</span>
@@ -168,7 +177,11 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
             setManualEmoji("");
           }}><Plus size={13} aria-hidden="true" />楽器・役職</button>
           </div></td>}
-          <td className="member-editor-action-cell">
+          <td className="member-editor-action-cell"><div className="member-editor-actions">
+          <div className="member-editor-reorder">
+            <button className="icon-button member-editor-move" type="button" aria-label={`メンバー${index + 1}を上へ`} title="上へ移動" disabled={index === 0} onClick={() => moveMember(index, -1)}><ArrowUp size={13} aria-hidden="true" /></button>
+            <button className="icon-button member-editor-move" type="button" aria-label={`メンバー${index + 1}を下へ`} title="下へ移動" disabled={index === members.length - 1} onClick={() => moveMember(index, 1)}><ArrowDown size={13} aria-hidden="true" /></button>
+          </div>
           <button className="icon-button member-editor-remove" type="button" aria-label={`メンバー${index + 1}を削除`} title="メンバーを削除" onClick={() => {
             onChange(members.filter((_, memberIndex) => memberIndex !== index).map(remaining => copyMember(remaining)));
             setEmojiTarget(null);
@@ -176,7 +189,7 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
             if (openIndex === index) { setOpenIndex(null); setCustomRole(""); setCustomEmoji("🏷️"); }
             else if (openIndex !== null && openIndex > index) setOpenIndex(openIndex - 1);
           }}><Trash2 size={15} aria-hidden="true" /></button>
-          </td>
+          </div></td>
         </tr>
         {(openIndex === index || emojiTarget?.index === index) && !rolesOptional && <tr className="member-editor-picker-row"><td colSpan={3}><div className="member-role-picker" id={`${id}-roles-${index}`}>
           {openIndex === index && <><div className="member-role-presets" role="group" aria-label={`メンバー${index + 1}の楽器`}>
@@ -218,11 +231,11 @@ export function MemberEditor({ members, onChange, rolesOptional, onRolesOptional
       </Fragment>)}</tbody>
       </table>
     </div>}
-    {members.length === 0 ? <button className="text-button member-editor-start" type="button" onClick={() => onChange([newMember()])}><Plus size={14} aria-hidden="true" />メンバー入力を始める</button> : <button className="text-button member-editor-add" type="button" disabled={!canAddMember} aria-describedby={incompleteIndex >= 0 && members.length < MAX_MEMBERS ? `${id}-incomplete` : undefined} title={!canAddMember ? incompleteMessage || `メンバーは${MAX_MEMBERS}人までです。` : undefined} onClick={() => {
+    <button className="text-button member-editor-add" type="button" disabled={!canAddMember} title={!canAddMember ? `メンバーは${MAX_MEMBERS}人までです。` : undefined} onClick={() => {
       if (!canAddMember) return;
       onChange([...members.map(member => copyMember(member)), newMember()]);
-    }}><Plus size={14} aria-hidden="true" />メンバーを追加</button>}
-    {incompleteIndex >= 0 && members.length < MAX_MEMBERS && <p className="member-role-limit" id={`${id}-incomplete`} aria-live="polite">{incompleteMessage}</p>}
+    }}><Plus size={14} aria-hidden="true" />メンバーを追加</button>
+    {incompleteIndex >= 0 && <p className="member-role-limit" id={`${id}-incomplete`} aria-live="polite">{incompleteMessage}</p>}
     {members.length >= MAX_MEMBERS && <p className="member-role-limit">メンバーは{MAX_MEMBERS}人までです。</p>}
   </fieldset>;
 }
