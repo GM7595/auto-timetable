@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowDownToLine, ArrowUpRight, Check, CheckCircle2, Loader2, LockKeyhole, MoreHorizontal, Plus, Trash2, X } from "lucide-react";
+import { ArrowDownToLine, ArrowUpRight, CalendarPlus, Check, CheckCircle2, ChevronDown, Download, FileJson, FileSpreadsheet, History, Loader2, LockKeyhole, Pencil, Play, Plug2, Plus, RotateCcw, Settings2, Trash2, X } from "lucide-react";
 import { demoState, createEmptyState } from "@/lib/demo";
 import { computeSchedule, formatTime, generatePlans, parseIssue, parseTime } from "@/lib/planner";
 import type { EventState, EventSlot, Plan, HistoryEntry } from "@/lib/types";
@@ -102,6 +102,7 @@ export default function Home() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("loading"), [storage, setStorage] = useState<"cloud" | "local">("local");
   const [aiConfigured, setAiConfigured] = useState(false), [filter, setFilter] = useState("all"), [panel, setPanel] = useState<"history" | "connections" | null>(null);
   const menuRef = useRef<HTMLDetailsElement>(null);
+  const exportMenuRef = useRef<HTMLDetailsElement>(null);
   const [slotEditor, setSlotEditor] = useState<EventSlot | "new" | null>(null), [settingsOpen, setSettingsOpen] = useState(false), [resetOpen, setResetOpen] = useState(false), [newEventOpen, setNewEventOpen] = useState(false);
   const [issueText, setIssueText] = useState(""), [plannedText, setPlannedText] = useState(""), [planning, setPlanning] = useState(false), [plans, setPlans] = useState<Plan[]>([]), [previewPlan, setPreviewPlan] = useState<Plan | null>(null), [planError, setPlanError] = useState("");
   const [planMeta, setPlanMeta] = useState<{ engine: string; elapsedMs: number; notice?: string } | null>(null), [toast, setToast] = useState("");
@@ -110,12 +111,25 @@ export default function Home() {
   const active = schedule.rows.find(x => x.status === "active");
   const errors = schedule.violations.filter(x => x.severity === "error");
   function notify(message: string) { setToast(message); if (toastTimeout.current) clearTimeout(toastTimeout.current); toastTimeout.current = setTimeout(() => setToast(""), 4500); }
-  function menuAction(action: () => void) { if (menuRef.current) menuRef.current.open = false; action(); }
+  function menuAction(action: () => void) {
+    for (const ref of [menuRef, exportMenuRef]) if (ref.current) ref.current.open = false;
+    action();
+  }
   function updateIssue(text: string) { setIssueText(text); setPlans([]); setPreviewPlan(null); setPlanMeta(null); setPlanError(""); }
 
   useEffect(() => {
-    const outside = (event: MouseEvent) => { if (menuRef.current && !menuRef.current.contains(event.target as Node)) menuRef.current.open = false; };
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape" && menuRef.current?.open) { menuRef.current.open = false; menuRef.current.querySelector<HTMLElement>("summary")?.focus(); } };
+    const menus = [menuRef, exportMenuRef];
+    const outside = (event: MouseEvent) => {
+      for (const ref of menus) if (ref.current && !ref.current.contains(event.target as Node)) ref.current.open = false;
+    };
+    const escape = (event: KeyboardEvent) => {
+      const openMenu = menus.find(ref => ref.current?.open)?.current;
+      if (event.key === "Escape" && openMenu) {
+        event.preventDefault();
+        for (const ref of menus) if (ref.current) ref.current.open = false;
+        openMenu.querySelector<HTMLElement>("summary")?.focus();
+      }
+    };
     document.addEventListener("click", outside); document.addEventListener("keydown", escape);
     return () => { document.removeEventListener("click", outside); document.removeEventListener("keydown", escape); };
   }, []);
@@ -209,27 +223,22 @@ export default function Home() {
     <header className="minimal-topbar">
       <span className="minimal-brand">タイテ作成ツール</span>
       <div className="minimal-tools">
-        <span className={"save-status" + (saveStatus === "error" ? " error" : "")} role="status">{saveStatus === "loading" ? "読み込み中" : saveStatus === "saving" ? "保存中" : saveStatus === "saved" ? "保存済み" : saveStatus === "error" ? "クラウド未保存" : "端末に保存"}</span>
+        <button type="button" className="button secondary small new-event-button" disabled={saveStatus === "loading"} onClick={() => menuAction(() => setNewEventOpen(true))}><CalendarPlus size={15} aria-hidden="true" /><span>新しいイベント</span></button>
         <details className="utility-menu" ref={menuRef}>
-          <summary className="icon-button" aria-label="その他の操作"><MoreHorizontal size={20} /></summary>
+          <summary className="icon-button" aria-label="表示・連携設定" title="表示・連携設定"><Settings2 size={18} aria-hidden="true" /></summary>
           <div className="utility-popover">
             <ThemeControl />
-            <button type="button" onClick={() => menuAction(() => setSettingsOpen(true))}>イベント設定</button>
-            <button type="button" onClick={() => menuAction(() => setPanel("history"))}>変更履歴</button>
-            <button type="button" onClick={() => menuAction(() => exportFile("csv"))}>CSVを書き出す</button>
-            <button type="button" onClick={() => menuAction(() => exportFile("json"))}>バックアップを書き出す</button>
-            <button type="button" onClick={() => menuAction(() => setPanel("connections"))}>連携・保存</button>
+            <button type="button" onClick={() => menuAction(() => setPanel("connections"))}><Plug2 size={15} aria-hidden="true" />連携・保存</button>
             <hr />
-            <button type="button" onClick={() => menuAction(() => setNewEventOpen(true))}>新しいイベント</button>
-            <button type="button" onClick={() => menuAction(() => setResetOpen(true))}>サンプルに戻す</button>
+            <button type="button" onClick={() => menuAction(() => setResetOpen(true))}><RotateCcw size={15} aria-hidden="true" />サンプルに戻す</button>
           </div>
         </details>
       </div>
     </header>
     <main className="minimal-workspace">
       <div className="event-heading">
-        <div><h1>{state.event.name}</h1><p className="event-details">{dateLabel(state.event.date)} · {formatTime(state.event.startTime)}–{formatTime(state.event.endTime)}{state.event.location && " · " + state.event.location}</p></div>
-        <div className="event-actions">{!active && state.slots.some(x => x.status === "planned") && !previewPlan && <button className="button secondary" disabled={saveStatus === "loading"} onClick={finishActive}>進行を開始</button>}<button className="button secondary" disabled={saveStatus === "loading"} onClick={() => setSlotEditor("new")}><Plus size={15} />枠を追加</button></div>
+        <div className="event-identity"><div className="event-title-row"><h1>{state.event.name}</h1><button type="button" className="icon-button event-edit" aria-label="イベント設定" title="イベント設定を編集" disabled={saveStatus === "loading"} onClick={() => setSettingsOpen(true)}><Pencil size={16} aria-hidden="true" /></button></div><p className="event-details">{dateLabel(state.event.date)} · {formatTime(state.event.startTime)}–{formatTime(state.event.endTime)}{state.event.location && " · " + state.event.location}</p></div>
+        <div className="event-actions"><span className={"save-status" + (saveStatus === "error" ? " error" : "")} role="status">{saveStatus === "loading" || saveStatus === "saving" ? <Loader2 size={13} className="spin" aria-hidden="true" /> : saveStatus === "saved" ? <CheckCircle2 size={13} aria-hidden="true" /> : null}{saveStatus === "loading" ? "読み込み中" : saveStatus === "saving" ? "保存中" : saveStatus === "saved" ? "保存済み" : saveStatus === "error" ? "クラウド未保存" : "端末に保存"}</span><button type="button" className="text-button" disabled={saveStatus === "loading"} onClick={() => setPanel("history")}><History size={15} aria-hidden="true" />変更履歴</button></div>
       </div>
       {errors.length > 0 && <div className="form-error" role="alert"><strong>進行条件を確認してください</strong>{errors.map((error, index) => <p key={index}>{error.message}</p>)}</div>}
       <form className="change-form" onSubmit={event => { event.preventDefault(); void requestPlans(); }}>
@@ -254,7 +263,18 @@ export default function Home() {
         {planMeta?.notice && <p className="engine-note">{planMeta.notice}</p>}
       </section>}
       <section className="timetable-shell" aria-label="イベントの進行表">
-        <div className="table-toolbar"><span className="table-count">タイムテーブル · {state.slots.length}枠</span><label className="table-filter"><span className="visually-hidden">表示する進行枠</span><select value={filter} onChange={event => setFilter(event.target.value)}><option value="all">すべて</option><option value="remaining">未完了</option><option value="done">終了済み</option></select></label></div>
+        <div className="table-toolbar"><span className="table-count">タイムテーブル · {state.slots.length}枠</span><div className="table-tools" role="group" aria-label="タイムテーブルの操作">
+          {!active && state.slots.some(x => x.status === "planned") && !previewPlan && <button type="button" className="button secondary small" disabled={saveStatus === "loading"} onClick={finishActive}><Play size={14} aria-hidden="true" />進行を開始</button>}
+          <button type="button" className="button secondary small" disabled={saveStatus === "loading"} onClick={() => setSlotEditor("new")}><Plus size={15} aria-hidden="true" />枠を追加</button>
+          <details className="export-menu" ref={exportMenuRef}>
+            <summary className="button secondary small" aria-label="書き出し"><Download size={15} aria-hidden="true" /><span>書き出し</span><ChevronDown size={12} aria-hidden="true" /></summary>
+            <div className="export-popover">
+              <button type="button" disabled={saveStatus === "loading"} onClick={() => menuAction(() => exportFile("csv"))}><FileSpreadsheet size={15} aria-hidden="true" />CSVを書き出す</button>
+              <button type="button" disabled={saveStatus === "loading"} onClick={() => menuAction(() => exportFile("json"))}><FileJson size={15} aria-hidden="true" />バックアップ（JSON）</button>
+            </div>
+          </details>
+          <label className="table-filter"><span className="visually-hidden">表示する進行枠</span><select value={filter} onChange={event => setFilter(event.target.value)}><option value="all">すべて</option><option value="remaining">未完了</option><option value="done">終了済み</option></select></label>
+        </div></div>
         {previewPlan && <div className="preview-strip"><span>{previewPlan.title} · 未反映のプレビュー</span><button type="button" className="text-button" onClick={() => setPreviewPlan(null)}>元の表に戻す</button></div>}
         <Timetable rows={filteredRows} allRows={visibleSchedule.rows} originalRows={schedule.rows} preview={!!previewPlan} onEdit={id => { if (saveStatus !== "loading") setSlotEditor(state.slots.find(slot => slot.id === id) ?? null); }} onFinishActive={finishActive} />
         {!!state.slots.length && <footer className="schedule-summary"><span>終了予定 <strong>{formatTime(visibleSchedule.endsAt)}</strong></span><span className={visibleSchedule.bufferMinutes < 0 ? "text-red" : ""}>{visibleSchedule.bufferMinutes >= 0 ? "終了時刻まで " + visibleSchedule.bufferMinutes + "分の余裕" : -visibleSchedule.bufferMinutes + "分超過"}</span></footer>}
@@ -266,7 +286,7 @@ export default function Home() {
     {panel === "connections" && <Dialog title="連携・保存" onClose={() => setPanel(null)}><div className="connection-settings">
       <section><h3>Decisions API <span className="connection-status">{aiConfigured ? "キー設定済み" : "未設定"}</span></h3><p>{aiConfigured ? "成立する候補の比較に使用します。時間条件は通常の計算で検証します。" : "現在は制約計算のみで動作しています。AIによる選択は行っていません。"}</p><a className="text-button" href="https://developers.openai.com/api/docs/guides/decisions" target="_blank" rel="noreferrer">公式ドキュメント<ArrowUpRight size={13} /></a></section>
       <section><h3>dots / MCP <span className="connection-status">自動監視は未接続</span></h3><p>進行情報の取得と変更案の提案に対応しています。自動での監視・反映は行いません。</p><button className="text-button" onClick={() => void copy(window.location.origin + "/mcp", "MCPのURLをコピーしました。")}>MCPのURLをコピー</button></section>
-      <section><h3>保存</h3><p>{storage === "cloud" ? "イベントはクラウドに保存されています。" : "現在はこの端末に保存されています。"}</p><p>所有者専用の非公開アプリです。URLを共有しても閲覧権限は付与されません。</p><button className="text-button" onClick={() => exportFile("json")}>バックアップを書き出す</button></section>
+      <section><h3>保存</h3><p>{storage === "cloud" ? "イベントはクラウドに保存されています。" : "現在はこの端末に保存されています。"}</p><p>所有者専用の非公開アプリです。URLを共有しても閲覧権限は付与されません。</p></section>
     </div></Dialog>}
     {resetOpen && <Dialog title="サンプルに戻しますか？" subtitle="現在のイベントを置き換えます。必要なら先にバックアップしてください。" onClose={() => setResetOpen(false)}><div className="form-body"><button className="button secondary" onClick={() => exportFile("json")}><ArrowDownToLine size={15} />バックアップを書き出す</button></div><footer className="modal-footer"><span /><div><button className="button secondary" onClick={() => setResetOpen(false)}>キャンセル</button><button className="button primary" onClick={() => { commit(structuredClone(demoState), historyItem("サンプルイベントを読み込み", "Community Day 2026の進行に戻しました。", "create")); setResetOpen(false); setFilter("all"); notify("サンプルイベントに戻しました。"); }}>サンプルに戻す</button></div></footer></Dialog>}
     {newEventOpen && <Dialog title="新しいイベント" subtitle="現在のイベントを置き換えて、空の表から始めます。" onClose={() => setNewEventOpen(false)}><form onSubmit={event => { event.preventDefault(); const data = new FormData(event.currentTarget), blank = createEmptyState(); blank.event.name = String(data.get("name")).trim(); blank.event.id = uid(); commit(blank, historyItem("イベントを作成", blank.event.name, "create")); setNewEventOpen(false); setFilter("all"); notify("新しいイベントを作成しました。"); }}><div className="form-body"><label className="field">イベント名<input name="name" placeholder="イベント名" required maxLength={160} /></label><button className="text-button" type="button" onClick={() => exportFile("json")}>現在のイベントをバックアップ</button></div><footer className="modal-footer"><span /><div><button className="button secondary" type="button" onClick={() => setNewEventOpen(false)}>キャンセル</button><button className="button primary" type="submit">作成する</button></div></footer></form></Dialog>}
