@@ -63,6 +63,7 @@ function SlotForm({ slot, currentStart, onSave, onClose, onDelete }: { slot: Eve
     const existing = getSlotMembers(slot ?? { people: [] });
     return existing.length ? existing : [{ name: "", roles: [] }];
   });
+  const [rolesOptional, setRolesOptional] = useState(() => members.length > 0 && members.every(member => member.roleNotRequired === true));
   return <Dialog title={slot ? "進行枠を編集" : "進行枠を追加"} subtitle="出演者・所要時間・準備条件をまとめて管理します。" onClose={onClose}>
     <form onSubmit={e => {
       e.preventDefault(); const data = new FormData(e.currentTarget);
@@ -70,10 +71,11 @@ function SlotForm({ slot, currentStart, onSave, onClose, onDelete }: { slot: Eve
       if (earliest && latest && parseTime(earliest) >= parseTime(latest)) { setError("出演可能時間の終了は開始より後にしてください。"); return; }
       const title = String(data.get("title") || "").trim();
       if (!title) { setError("タイトルを入力してください。"); return; }
-      const cleanedMembers = members.map(member => ({ name: member.name.trim(), roles: [...new Set(member.roles.map(role => role.trim()).filter(Boolean))], ...(member.roleNotRequired ? { roleNotRequired: true } : {}) })).filter(member => member.name || member.roles.length || member.roleNotRequired);
+      // The switch applies to this entire member table. Per-member flags remain
+      // the storage format so old events and saved proposals stay compatible.
+      const cleanedMembers = members.filter(member => member.name.trim() || member.roles.some(role => role.trim())).map(member => ({ name: member.name.trim(), roles: rolesOptional ? [] : [...new Set(member.roles.map(role => role.trim()).filter(Boolean))], ...(rolesOptional ? { roleNotRequired: true } : {}) }));
       if (cleanedMembers.some(member => !member.name)) { setError("担当を設定したメンバーの名前を入力してください。"); return; }
       if (cleanedMembers.some(member => !member.roles.length && !member.roleNotRequired)) { setError("名前と楽器・役職の両方を入力してください。役職が不要なら「役職なし」を選んでください。"); return; }
-      if (cleanedMembers.some(member => member.roles.length > 0 && member.roleNotRequired)) { setError("「役職なし」を選ぶ場合は、選択した楽器・役職を解除してください。"); return; }
       if (cleanedMembers.length > 30 || cleanedMembers.some(member => member.name.length > 160 || member.roles.length > 12 || member.roles.some(role => role.length > 40))) { setError("メンバーは30人まで、担当は1人12件・各40文字までにしてください。"); return; }
       if (new Set(cleanedMembers.map(member => member.name)).size !== cleanedMembers.length) { setError("同じ名前のメンバーが重複しています。複数の担当は1人にまとめて設定してください。"); return; }
       const locked = data.get("locked") === "on";
@@ -82,7 +84,10 @@ function SlotForm({ slot, currentStart, onSave, onClose, onDelete }: { slot: Eve
       <div className="form-body">
         <label className="field">タイトル <span className="required">必須</span><input name="title" placeholder="例：プロダクトデモ＆トーク" maxLength={160} required defaultValue={slot?.title} /></label>
         <label className="field">出演者・グループ名<input name="group" placeholder="例：チーム Horizon" maxLength={160} defaultValue={slot?.group} /></label>
-        <MemberEditor members={members} onChange={setMembers} />
+        <MemberEditor members={members} onChange={setMembers} rolesOptional={rolesOptional} onRolesOptionalChange={optional => {
+          setRolesOptional(optional);
+          setMembers(members.map(member => ({ ...member, roles: optional ? [] : [...member.roles], roleNotRequired: optional ? true : undefined })));
+        }} />
         <div className="form-grid"><label className="field">本編の時間<div className="input-unit"><input type="number" min="1" max="240" name="duration" defaultValue={slot?.durationMinutes ?? 20} required /><span>分</span></div></label><label className="field">この枠の前の準備・転換<div className="input-unit"><input type="number" min="0" max="90" name="changeover" defaultValue={slot?.changeoverMinutes ?? 5} required /><span>分</span></div></label></div>
         <details className="advanced-fields"><summary>機材・詳細条件{slot?.locked ? "（時刻固定）" : ""}</summary><div className="advanced-fields-body">
         <label className="field">カテゴリー<select name="kind" defaultValue={slot?.kind ?? "talk"}>{Object.entries(KIND).map(([key, value]) => <option key={key} value={key}>{value.label}</option>)}</select></label>
